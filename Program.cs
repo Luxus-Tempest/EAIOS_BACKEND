@@ -1,33 +1,150 @@
-
 using EAIOS.Api.Infrastructure;
 using EAIOS.Api.Middleware;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Security.Cryptography;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers(options => options.Filters.Add<RequireTenantFilter>());
-builder.Services.AddOpenApi();
-builder.Services.AddProblemDetails();
+// ── Logging ────────────────────────────────────────────────────────────────
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole(opts => opts.FormatterName = "simple");
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+
+// ── Infrastructure (DbContexts, Repositories, Services) ──────────────────
+builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddSingleton<InMemoryEaiosStore>();
-builder.Services.AddSingleton<TokenService>();
-builder.Services.AddScoped<CurrentTenant>();
+
+// ── Authentication JWT ────────────────────────────────────────────────────
+var rsa = RSA.Create(2048); // Dev key — en prod: charger depuis PEM
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(opts =>
+    {
+        opts.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer           = false, // Simplifié pour dev InMemory
+            ValidateAudience         = false,
+            ValidateLifetime         = true,
+            ValidateIssuerSigningKey = false, // Stub TokenService gère sa propre validation
+            ClockSkew                = TimeSpan.FromSeconds(30)
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// ── API Controllers ───────────────────────────────────────────────────────
+builder.Services.AddControllers()
+    .AddJsonOptions(opts =>
+    {
+        opts.JsonSerializerOptions.DefaultIgnoreCondition =
+            System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+        opts.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+    });
+
+// ── OpenAPI ───────────────────────────────────────────────────────────────
+builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+
+// ── Exception Handler ─────────────────────────────────────────────────────
+builder.Services.AddExceptionHandler<EAIOS.Api.Middleware.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
+// ── CORS ──────────────────────────────────────────────────────────────────
+builder.Services.AddCors(opts =>
+    opts.AddDefaultPolicy(p =>
+        p.WithOrigins(builder.Configuration["Cors:AllowedOrigins"]?.Split(',') ?? ["http://localhost:3000", "http://localhost:5173"])
+         .AllowAnyHeader()
+         .AllowAnyMethod()
+         .AllowCredentials()));
+
+// ── Health Checks ─────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
+// ── Pipeline ──────────────────────────────────────────────────────────────
 app.UseExceptionHandler();
-app.UseStatusCodePages();
-app.UseHttpsRedirection();
-app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseMiddleware<BearerTokenMiddleware>();
-app.UseMiddleware<TenantResolutionMiddleware>();
 
 if (app.Environment.IsDevelopment())
+{
     app.MapOpenApi();
+    app.UseStaticFiles(); // pour Swagger UI si ajouté
+}
 
-app.MapGet("/health/live", () => Results.Ok(new { status = "Healthy" })).AllowAnonymous();
-app.MapGet("/health/ready", () => Results.Ok(new { status = "Healthy", checks = new { api = "Healthy" } })).AllowAnonymous();
+app.UseCors();
+app.UseMiddleware<EAIOS.Api.Middleware.CorrelationIdMiddleware>();
+app.UseMiddleware<EAIOS.Api.Middleware.RateLimitingMiddleware>();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.UseMiddleware<EAIOS.Api.Middleware.TenantResolutionMiddleware>();
+
 app.MapControllers();
+app.MapHealthChecks("/health");
 
-app.Run();
+// ── Seed données de développement ────────────────────────────────────────
+if (app.Environment.IsDevelopment())
+{
+    await SeedDevelopmentDataAsync(app);
+}
 
-public partial class Program;
+await app.RunAsync();
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Helper : seed données initiales pour l'environnement de développement
+// ═════════════════════════════════════════════════════════════════════════════
+
+static async Task SeedDevelopmentDataAsync(WebApplication app)
+{
+    using var scope = app.Services.CreateScope();
+    var sp     = scope.ServiceProvider;
+    var logger = sp.GetRequiredService<ILogger<Program>>();
+
+    try
+    {
+        var eaiosDb    = sp.GetRequiredService<EAIOS.Api.Infrastructure.Persistence.EaiosDbContext>();
+        var platformDb = sp.GetRequiredService<EAIOS.Api.Infrastructure.Persistence.PlatformDbContext>();
+        var pwdService = sp.GetRequiredService<EAIOS.Api.Infrastructure.Security.IPasswordService>();
+
+        // Organisation de démo
+        var orgId   = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var adminId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+
+        var org = new EAIOS.Api.Domain.Organization.Organization
+        {
+            Id     = orgId,
+            Name   = "EAIOS Demo",
+            Slug   = "eaios-demo",
+            Status = EAIOS.Api.Domain.Organization.OrganizationStatus.Active
+        };
+        if (!platformDb.Organizations.Any())
+        {
+            await platformDb.Organizations.AddAsync(org);
+            await platformDb.SaveChangesAsync();
+        }
+
+        // Résoudre tenant pour le seeding
+        var tenantCtx = sp.GetRequiredService<EAIOS.Api.Application.Common.Interfaces.ITenantContext>();
+        tenantCtx.SetTenant(orgId);
+
+        // Utilisateur admin
+        if (!eaiosDb.Users.Any())
+        {
+            var admin = EAIOS.Api.Domain.Identity.User.Create(orgId, "admin@eaios.io", "Admin", "EAIOS");
+            admin.SetPasswordHash(pwdService.HashPassword("Admin@123456!"));
+            admin.VerifyEmail(admin.EmailVerificationToken ?? "");
+
+            await eaiosDb.Users.AddAsync(admin);
+            await eaiosDb.SaveChangesAsync();
+
+            logger.LogInformation("✅ Seeded admin user: admin@eaios.io / Admin@123456!");
+        }
+
+        logger.LogInformation("✅ Development seed complete for org {OrgId}", orgId);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "❌ Seed failed: {Message}", ex.Message);
+    }
+}

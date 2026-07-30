@@ -1,66 +1,280 @@
-using EAIOS.Api.Contracts;
-using EAIOS.Api.Domain;
-using EAIOS.Api.Infrastructure;
+using EAIOS.Api.Application.Identity;
+using EAIOS.Api.Domain.Identity;
+using EAIOS.Api.Infrastructure.Persistence.Repositories.Identity;
+using EAIOS.Api.Infrastructure.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EAIOS.Api.Controllers.V1;
 
-[ApiController]
-[Route("v1/auth")]
-public sealed class AuthController(InMemoryEaiosStore store, TokenService tokens, IHostEnvironment environment) : ControllerBase
+/// <summary>
+/// Authentication : login, refresh, logout, register, profil, MFA, sessions, API keys.
+/// </summary>
+[Route("api/v1/auth")]
+[AllowAnonymous]
+public sealed class AuthController(
+    IUserRepository        userRepo,
+    ISessionRepository     sessionRepo,
+    IInvitationRepository  invitationRepo,
+    IMfaCredentialRepository mfaRepo,
+    IApiKeyRepository      apiKeyRepo,
+    ITokenService          tokenService,
+    IPasswordService       passwordService,
+    ITotpService           totpService,
+    IApiKeyService         apiKeyService) : V1ApiController
 {
-    /// <remarks>Development bootstrap only. Production account creation is invitation-only per the specification.</remarks>
-    [HttpPost("bootstrap")]
-    public ActionResult<object> Bootstrap(BootstrapOrganizationRequest request)
-    {
-        if (!environment.IsDevelopment()) return NotFound();
-        if (store.Users.Values.Any(user => string.Equals(user.Email, request.Email, StringComparison.OrdinalIgnoreCase)))
-            return Conflict(Problem("Email already exists."));
-        var organization = new Organization { Name = request.OrganizationName };
-        var user = new User { OrganizationId = organization.Id, Email = request.Email.Trim().ToLowerInvariant(), FirstName = request.FirstName, LastName = request.LastName, PasswordHash = TokenService.HashPassword(request.Password) };
-        user.Roles.Add("org.admin");
-        store.Organizations[organization.Id] = organization;
-        store.Users[user.Id] = user;
-        return Created($"/v1/organization", new { data = new { organizationId = organization.Id, userId = user.Id } });
-    }
-
+    // ── POST /api/v1/auth/login ───────────────────────────────────────────────
     [HttpPost("login")]
-    public ActionResult<object> Login(LoginRequest request, [FromHeader(Name = "X-Tenant-ID")] Guid tenantId)
+    public async Task<IActionResult> Login([FromBody] LoginRequest req, CancellationToken ct)
     {
-        var user = store.FindUser(tenantId, request.Email);
-        if (user is null || !user.IsActive || !TokenService.VerifyPassword(request.Password, user.PasswordHash))
-            return Unauthorized(Problem("Invalid credentials.", StatusCodes.Status401Unauthorized));
-        return Ok(new { data = CreateResponse(user) });
+        var user = await userRepo.FindByEmailAsync(req.Email.Trim().ToUpperInvariant(), ct);
+
+        if (user == null || !passwordService.VerifyPassword(req.Password, user.PasswordHash ?? ""))
+        {
+            await Task.Delay(300, ct); // Constant-time delay to prevent timing attacks
+            return Unauthorized(new { code = "INVALID_CREDENTIALS", message = "Email ou mot de passe incorrect." });
+        }
+
+        if (user.Status == UserStatus.Suspended)
+            return StatusCode(403, new { code = "ACCOUNT_SUSPENDED", message = user.SuspensionReason });
+
+        // MFA step-up
+        if (user.IsMfaEnabled)
+        {
+            if (string.IsNullOrWhiteSpace(req.MfaCode))
+            {
+                return Ok(new LoginResponse(
+                    AccessToken: null, RefreshToken: null, ExpiresIn: 0,
+                    User: MapUser(user), RequiresMfa: true, MfaToken: Guid.CreateVersion7().ToString("N")));
+            }
+
+            var mfaCred = await mfaRepo.FindByUserAndMethodAsync(user.Id, MfaMethod.Totp, ct);
+            if (mfaCred == null || !totpService.VerifyCode(mfaCred.SecretEncrypted ?? "", req.MfaCode))
+                return Unauthorized(new { code = "INVALID_MFA_CODE", message = "Code MFA invalide." });
+        }
+
+        // Créer la session
+        var tokenPair = tokenService.Issue(user.Id, user.OrganizationId, Guid.CreateVersion7(), [], []);
+        var session   = Session.Create(
+            user.OrganizationId, user.Id,
+            tokenPair.RefreshTokenHash,
+            7,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString());
+
+        await sessionRepo.AddAsync(session, ct);
+        user.RecordLogin(HttpContext.Connection.RemoteIpAddress?.ToString() ?? "");
+        await userRepo.SaveAsync(ct);
+        await sessionRepo.SaveAsync(ct);
+
+        return Ok200(new LoginResponse(
+            AccessToken:  tokenPair.AccessToken,
+            RefreshToken: tokenPair.RefreshToken,
+            ExpiresIn:    (int)(tokenPair.AccessTokenExpiresAt - DateTimeOffset.UtcNow).TotalSeconds,
+            User:         MapUser(user)));
     }
 
+    // ── POST /api/v1/auth/refresh ─────────────────────────────────────────────
     [HttpPost("refresh")]
-    public ActionResult<object> Refresh(RefreshRequest request)
+    public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequest req, CancellationToken ct)
     {
-        var hash = TokenService.Hash(request.RefreshToken);
-        var session = store.Sessions.Values.SingleOrDefault(s => s.RefreshTokenHash == hash && !s.IsRevoked && s.ExpiresAt > DateTimeOffset.UtcNow);
-        if (session is null || !store.Users.TryGetValue(session.UserId, out var user) || !user.IsActive)
-            return Unauthorized(Problem("Invalid, expired, or revoked refresh token.", StatusCodes.Status401Unauthorized));
-        session.IsRevoked = true; // rotation
-        return Ok(new { data = CreateResponse(user) });
+        var hash    = tokenService.HashRefreshToken(req.RefreshToken);
+        var session = await sessionRepo.FindByRefreshTokenHashAsync(hash, ct);
+
+        if (session == null || session.ExpiresAt < DateTime.UtcNow)
+            return Unauthorized(new { code = "INVALID_REFRESH_TOKEN" });
+
+        var user = await userRepo.GetByIdAsync(session.UserId, ct);
+        if (user == null || user.Status != UserStatus.Active)
+            return Unauthorized(new { code = "USER_NOT_FOUND_OR_INACTIVE" });
+
+        var newPair = tokenService.Issue(user.Id, user.OrganizationId, session.Id, [], []);
+        session.Rotate(newPair.RefreshTokenHash);
+        await sessionRepo.SaveAsync(ct);
+
+        return Ok200(new RefreshResponse(
+            newPair.AccessToken,
+            newPair.RefreshToken,
+            (int)(newPair.AccessTokenExpiresAt - DateTimeOffset.UtcNow).TotalSeconds));
     }
 
+    // ── POST /api/v1/auth/logout ──────────────────────────────────────────────
     [HttpPost("logout")]
-    public IActionResult Logout()
+    [Authorize]
+    public async Task<IActionResult> Logout([FromBody] LogoutRequest req, CancellationToken ct)
     {
-        var userId = HttpContext.User.Identity?.IsAuthenticated == true ? Guid.Parse(HttpContext.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value) : Guid.Empty;
-        foreach (var session in store.Sessions.Values.Where(s => s.UserId == userId)) session.IsRevoked = true;
-        return NoContent();
+        var hash    = tokenService.HashRefreshToken(req.RefreshToken);
+        var session = await sessionRepo.FindByRefreshTokenHashAsync(hash, ct);
+        if (session != null)
+        {
+            session.Revoke("user_logout");
+            await sessionRepo.SaveAsync(ct);
+        }
+        return NoContent204();
     }
 
-    private TokenResponse CreateResponse(User user)
+    // ── POST /api/v1/auth/register ────────────────────────────────────────────
+    [HttpPost("register")]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest req, CancellationToken ct)
     {
-        var session = new Session { UserId = user.Id, RefreshTokenHash = string.Empty, ExpiresAt = DateTimeOffset.UtcNow };
-        var pair = tokens.Issue(user, session.Id);
-        session.RefreshTokenHash = TokenService.Hash(pair.RefreshToken);
-        session.ExpiresAt = pair.RefreshTokenExpiresAt;
-        store.Sessions[session.Id] = session;
-        return new TokenResponse(pair.AccessToken, pair.RefreshToken, pair.AccessTokenExpiresAt, pair.RefreshTokenExpiresAt, "Bearer", new { user.Id, user.Email, user.FirstName, user.LastName, organizationId = user.OrganizationId, roles = user.Roles, mfaRequired = false });
+        var invitation = await invitationRepo.FindByTokenAsync(req.InvitationToken, ct);
+        if (invitation == null || !invitation.IsValid)
+            return BadRequest(new { code = "INVALID_INVITATION", message = "Invitation invalide ou expirée." });
+
+        if (!passwordService.IsStrongPassword(req.Password))
+            return BadRequest(new { code = "WEAK_PASSWORD", message = "Le mot de passe ne respecte pas les critères de sécurité." });
+
+        var normalizedEmail = req.Email.Trim().ToUpperInvariant();
+        if (await userRepo.EmailExistsAsync(normalizedEmail, ct))
+            return Conflict("Un compte avec cet email existe déjà.");
+
+        var user = User.Create(invitation.OrganizationId, req.Email.Trim(), req.FirstName, req.LastName);
+        user.SetPasswordHash(passwordService.HashPassword(req.Password));
+        user.VerifyEmail(user.EmailVerificationToken ?? "");
+
+        await userRepo.AddAsync(user, ct);
+        invitation.Accept(user.Id);
+        await userRepo.SaveAsync(ct);
+
+        return Ok200(MapUser(user));
     }
 
-    private ProblemDetails Problem(string detail, int status = StatusCodes.Status400BadRequest) => new() { Status = status, Title = "Request rejected", Detail = detail, Instance = HttpContext.Request.Path };
+    // ── GET /api/v1/auth/me ───────────────────────────────────────────────────
+    [HttpGet("me")]
+    [Authorize]
+    public async Task<IActionResult> Me(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
+        if (user == null) return NotFound();
+        return Ok200(MapUser(user));
+    }
+
+    // ── MFA : Setup ───────────────────────────────────────────────────────────
+    [HttpPost("mfa/setup")]
+    [Authorize]
+    public async Task<IActionResult> MfaSetup(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
+        if (user == null) return NotFound();
+
+        var secret      = totpService.GenerateSecret();
+        var qrUri       = totpService.BuildQrCodeUri(user.Email, secret);
+        var backupCodes = totpService.GenerateBackupCodes();
+
+        return Ok200(new MfaSetupDto(secret, qrUri, backupCodes));
+    }
+
+    // ── MFA : Enable ──────────────────────────────────────────────────────────
+    [HttpPost("mfa/enable")]
+    [Authorize]
+    public async Task<IActionResult> MfaEnable([FromBody] EnableTotpRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
+        if (user == null) return NotFound();
+
+        if (!totpService.VerifyCode(req.Secret, req.Code))
+            return BadRequest(new { code = "INVALID_TOTP_CODE", message = "Code de vérification invalide." });
+
+        // Persister la credential MFA
+        var cred = MfaCredential.Create(user.OrganizationId, user.Id, MfaMethod.Totp, req.Secret);
+        var backupHashes = req.BackupCodes.Select(c => totpService.HashBackupCode(c)).ToArray();
+        cred.SetBackupCodes(backupHashes);
+
+        await mfaRepo.AddAsync(cred, ct);
+        user.EnableMfa(MfaMethod.Totp);
+        await userRepo.SaveAsync(ct);
+        await mfaRepo.SaveAsync(ct);
+
+        return Ok(new { message = "MFA TOTP activé avec succès." });
+    }
+
+    // ── MFA : Disable ─────────────────────────────────────────────────────────
+    [HttpPost("mfa/disable")]
+    [Authorize]
+    public async Task<IActionResult> MfaDisable([FromBody] DisableMfaRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
+        if (user == null) return NotFound();
+
+        if (!passwordService.VerifyPassword(req.Password, user.PasswordHash ?? ""))
+            return Unauthorized(new { code = "INVALID_PASSWORD" });
+
+        user.DisableMfa();
+        var creds = await mfaRepo.GetActiveByUserAsync(user.Id, ct);
+        foreach (var c in creds) mfaRepo.SoftDelete(c);
+
+        await userRepo.SaveAsync(ct);
+        return Ok(new { message = "MFA désactivé." });
+    }
+
+    // ── Sessions ──────────────────────────────────────────────────────────────
+    [HttpGet("sessions")]
+    [Authorize]
+    public async Task<IActionResult> GetSessions(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var sessions = await sessionRepo.GetActiveByUserAsync(ActorId.Value, ct);
+        var dtos = sessions.Select(s => new SessionDto(s.Id, s.DeviceType, s.DeviceOs, s.DeviceName, s.IpAddress, s.Status, s.LastActivityAt, s.CreatedAt, s.ExpiresAt)).ToList();
+        return Ok200(dtos);
+    }
+
+    [HttpDelete("sessions/{id:guid}")]
+    [Authorize]
+    public async Task<IActionResult> RevokeSession(Guid id, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var session = await sessionRepo.GetByIdAsync(id, ct);
+        if (session == null || session.UserId != ActorId.Value) return NotFound();
+        session.Revoke("user_request");
+        await sessionRepo.SaveAsync(ct);
+        return NoContent204();
+    }
+
+    // ── API Keys ──────────────────────────────────────────────────────────────
+    [HttpGet("api-keys")]
+    [Authorize]
+    public async Task<IActionResult> ListApiKeys(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var keys = await apiKeyRepo.GetByUserAsync(ActorId.Value, ct);
+        var dtos = keys.Select(k => new ApiKeyDto(k.Id, k.Name, k.KeyPrefix, k.IsActive, k.ExpiresAt, k.LastUsedAt, k.CreatedAt)).ToList();
+        return Ok200(dtos);
+    }
+
+    [HttpPost("api-keys")]
+    [Authorize]
+    public async Task<IActionResult> CreateApiKey([FromBody] CreateApiKeyRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var (fullKey, prefix, hash) = apiKeyService.Generate();
+        var apiKey = ApiKey.Create(TenantId, ActorId.Value, req.Name, prefix, hash, req.ExpiresAt);
+
+        await apiKeyRepo.AddAsync(apiKey, ct);
+        await apiKeyRepo.SaveAsync(ct);
+
+        // Retourner la clé en clair UNE SEULE FOIS
+        return Ok200(new ApiKeyCreatedDto(apiKey.Id, apiKey.Name, fullKey, apiKey.KeyPrefix, apiKey.CreatedAt));
+    }
+
+    [HttpDelete("api-keys/{id:guid}")]
+    [Authorize]
+    public async Task<IActionResult> RevokeApiKey(Guid id, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var key = await apiKeyRepo.GetByIdAsync(id, ct);
+        if (key == null || key.UserId != ActorId.Value) return NotFound();
+        apiKeyRepo.SoftDelete(key);
+        await apiKeyRepo.SaveAsync(ct);
+        return NoContent204();
+    }
+
+    // ── Mapper ────────────────────────────────────────────────────────────────
+    private static UserDto MapUser(User u) =>
+        new(u.Id, u.OrganizationId, u.Email, u.FirstName, u.LastName, u.FullName, u.DisplayName,
+            u.AvatarUrl, u.JobTitle, u.Department, u.Locale, u.TimeZone, u.Status, u.IsEmailVerified,
+            u.IsMfaEnabled, u.LastLoginAt, u.CreatedAt, [], []);
 }

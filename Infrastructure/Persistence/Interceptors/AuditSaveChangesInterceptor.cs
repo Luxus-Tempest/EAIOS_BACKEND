@@ -4,111 +4,112 @@ using EAIOS.Api.Domain.Platform;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace EAIOS.Api.Infrastructure.Persistence.Interceptors;
 
 /// <summary>
-/// Intercepts SaveChanges to automatically emit AuditEvents for all data mutations.
-/// Captures OldValues / NewValues diff for security and compliance.
+/// Intercepte chaque SaveChanges pour enregistrer automatiquement un AuditEvent
+/// pour toute mutation d'entité TenantEntity.
+/// Ne capture jamais les champs sensibles (mots de passe, tokens, clés).
 /// </summary>
 public sealed class AuditSaveChangesInterceptor(
     ICurrentUser currentUser,
     IHttpContextAccessor httpContextAccessor,
     PlatformDbContext auditDb) : SaveChangesInterceptor
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false
+    };
+
+    private static readonly HashSet<string> _sensitiveFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PasswordHash", "RefreshTokenHash", "CredentialsEncrypted",
+        "SecretEncrypted", "BackupCodesJson", "KeyHash", "PasswordResetToken",
+        "EmailVerificationToken", "AccessTokenJti"
+    };
+
     public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
         DbContextEventData eventData,
         InterceptionResult<int> result,
-        CancellationToken cancellationToken = default)
+        CancellationToken ct = default)
     {
         if (eventData.Context is EaiosDbContext db)
-            await CaptureAuditEventsAsync(db, cancellationToken);
+            await CaptureAsync(db, ct);
 
-        return await base.SavingChangesAsync(eventData, result, cancellationToken);
+        return await base.SavingChangesAsync(eventData, result, ct);
     }
 
-    private async Task CaptureAuditEventsAsync(EaiosDbContext db, CancellationToken ct)
+    private async Task CaptureAsync(EaiosDbContext db, CancellationToken ct)
     {
-        var auditableEntries = db.ChangeTracker.Entries<TenantEntity>()
+        var entries = db.ChangeTracker.Entries<TenantEntity>()
             .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
             .ToList();
 
-        if (auditableEntries.Count == 0) return;
+        if (entries.Count == 0) return;
 
-        var ip = httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
-        var correlationId = httpContextAccessor.HttpContext?.Items["X-Correlation-ID"]?.ToString();
+        var http          = httpContextAccessor.HttpContext;
+        var correlationId = http?.Items["X-Correlation-ID"]?.ToString();
+        var ip            = http?.Connection.RemoteIpAddress?.ToString();
+        var ua            = http?.Request.Headers.UserAgent.ToString();
 
-        foreach (var entry in auditableEntries)
+        var events = new List<AuditEvent>(entries.Count);
+
+        foreach (var entry in entries)
         {
+            var typeName = entry.Entity.GetType().Name;
             var action = entry.State switch
             {
-                EntityState.Added    => $"{entry.Entity.GetType().Name.ToLower()}.created",
-                EntityState.Modified => $"{entry.Entity.GetType().Name.ToLower()}.updated",
-                EntityState.Deleted  => $"{entry.Entity.GetType().Name.ToLower()}.deleted",
-                _                    => "unknown"
+                EntityState.Added    => $"{typeName}.created",
+                EntityState.Modified => entry.Entity.IsDeleted ? $"{typeName}.soft_deleted" : $"{typeName}.updated",
+                EntityState.Deleted  => $"{typeName}.hard_deleted",
+                _                    => $"{typeName}.unknown"
             };
 
-            var oldValues = entry.State == EntityState.Added
-                ? null
-                : SerializeProperties(entry.OriginalValues);
+            string? oldJson = null, newJson = null;
 
-            var newValues = entry.State == EntityState.Deleted
-                ? null
-                : SerializeCurrentValues(entry.Entity);
-
-            var auditEvent = new AuditEvent
+            if (entry.State == EntityState.Modified)
             {
-                OrganizationId = entry.Entity.OrganizationId,
-                ActorId = currentUser.UserId,
-                ActorEmail = currentUser.Email,
-                ActorIp = ip,
-                ActorType = "User",
-                Action = action,
-                Module = GetModule(entry.Entity.GetType().Namespace),
-                Result = AuditEventResult.Success,
-                ResourceId = entry.Entity.Id,
-                ResourceType = entry.Entity.GetType().Name,
-                OldValuesJson = oldValues,
-                NewValuesJson = newValues,
-                CorrelationId = correlationId
-            };
+                var changed = entry.Properties
+                    .Where(p => p.IsModified && !_sensitiveFields.Contains(p.Metadata.Name))
+                    .ToDictionary(p => p.Metadata.Name, p => new { Old = p.OriginalValue, New = p.CurrentValue });
 
-            auditDb.AuditEvents.Add(auditEvent);
+                if (changed.Count > 0)
+                {
+                    oldJson = JsonSerializer.Serialize(changed.ToDictionary(k => k.Key, k => k.Value.Old), _jsonOptions);
+                    newJson = JsonSerializer.Serialize(changed.ToDictionary(k => k.Key, k => k.Value.New), _jsonOptions);
+                }
+            }
+            else if (entry.State == EntityState.Added)
+            {
+                var vals = entry.Properties
+                    .Where(p => !_sensitiveFields.Contains(p.Metadata.Name))
+                    .ToDictionary(p => p.Metadata.Name, p => p.CurrentValue);
+                newJson = JsonSerializer.Serialize(vals, _jsonOptions);
+            }
+
+            events.Add(new AuditEvent
+            {
+                OrganizationId   = entry.Entity.OrganizationId,
+                ActorId          = currentUser.UserId,
+                ActorEmail       = currentUser.Email,
+                ActorIp          = ip,
+                ActorUserAgent   = ua,
+                ActorType        = "User",
+                Action           = action,
+                Module           = entry.Entity.GetType().Namespace?.Split('.').LastOrDefault()?.ToLowerInvariant(),
+                Result           = AuditEventResult.Success,
+                ResourceId       = entry.Entity.Id,
+                ResourceType     = typeName,
+                OldValuesJson    = oldJson,
+                NewValuesJson    = newJson,
+                CorrelationId    = correlationId
+            });
         }
 
+        await auditDb.AuditEvents.AddRangeAsync(events, ct);
         await auditDb.SaveChangesAsync(ct);
     }
-
-    private static string? SerializeProperties(Microsoft.EntityFrameworkCore.ChangeTracking.PropertyValues values)
-    {
-        try
-        {
-            var dict = values.Properties
-                .Where(p => !SensitiveProperties.Contains(p.Name))
-                .ToDictionary(p => p.Name, p => values[p]);
-            return JsonSerializer.Serialize(dict);
-        }
-        catch { return null; }
-    }
-
-    private static string? SerializeCurrentValues(object entity)
-    {
-        try
-        {
-            var type = entity.GetType();
-            var props = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-                .Where(p => !SensitiveProperties.Contains(p.Name))
-                .ToDictionary(p => p.Name, p => p.GetValue(entity));
-            return JsonSerializer.Serialize(props);
-        }
-        catch { return null; }
-    }
-
-    private static string? GetModule(string? ns) => ns?.Split('.').LastOrDefault()?.ToLowerInvariant();
-
-    private static readonly HashSet<string> SensitiveProperties =
-    [
-        "PasswordHash", "RefreshTokenHash", "CredentialsEncrypted",
-        "SecretEncrypted", "BackupCodesJson", "KeyHash"
-    ];
 }

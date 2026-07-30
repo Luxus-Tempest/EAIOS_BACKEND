@@ -1,5 +1,4 @@
 using EAIOS.Api.Application.Common.Interfaces;
-using EAIOS.Api.Domain.Shared.Interfaces;
 using EAIOS.Api.Domain.Shared.Primitives;
 using EAIOS.Api.Domain.Identity;
 using EAIOS.Api.Domain.Organization;
@@ -13,165 +12,131 @@ using EAIOS.Api.Domain.Analytics;
 using EAIOS.Api.Domain.Notification;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
-using System.Text.Json;
 
 namespace EAIOS.Api.Infrastructure.Persistence;
 
 /// <summary>
-/// Main tenant-scoped DbContext.
-/// All entities are automatically filtered by OrganizationId (Global Query Filters).
-/// Soft-deleted records are excluded by default.
-/// Schema-per-tenant: uses org_{id} schema in PostgreSQL.
+/// Tenant-scoped DbContext. Global Query Filters assurent l'isolation par OrganizationId
+/// et l'exclusion automatique des enregistrements soft-deleted.
 /// </summary>
 public sealed class EaiosDbContext : DbContext
 {
     private readonly ITenantContext _tenantContext;
     private readonly ICurrentUser _currentUser;
 
-    public EaiosDbContext(DbContextOptions<EaiosDbContext> options,
-        ITenantContext tenantContext, ICurrentUser currentUser)
-        : base(options)
+    public EaiosDbContext(
+        DbContextOptions<EaiosDbContext> options,
+        ITenantContext tenantContext,
+        ICurrentUser currentUser) : base(options)
     {
         _tenantContext = tenantContext;
         _currentUser = currentUser;
     }
 
-    // ── Identity ──────────────────────────────────────────────────────────────
-    public DbSet<User> Users => Set<User>();
-    public DbSet<Session> Sessions => Set<Session>();
-    public DbSet<MfaCredential> MfaCredentials => Set<MfaCredential>();
-    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
-    public DbSet<Invitation> Invitations => Set<Invitation>();
+    // ── Identity ───────────────────────────────────────────────────────────────
+    public DbSet<User>             Users             => Set<User>();
+    public DbSet<Session>          Sessions          => Set<Session>();
+    public DbSet<MfaCredential>    MfaCredentials    => Set<MfaCredential>();
+    public DbSet<ApiKey>           ApiKeys           => Set<ApiKey>();
+    public DbSet<Invitation>       Invitations       => Set<Invitation>();
 
     // ── Organization ──────────────────────────────────────────────────────────
-    public DbSet<Workspace> Workspaces => Set<Workspace>();
-    public DbSet<Department> Departments => Set<Department>();
-    public DbSet<Membership> Memberships => Set<Membership>();
+    public DbSet<Workspace>        Workspaces        => Set<Workspace>();
+    public DbSet<Department>       Departments       => Set<Department>();
+    public DbSet<Membership>       Memberships       => Set<Membership>();
 
     // ── Access Control ────────────────────────────────────────────────────────
-    public DbSet<Role> Roles => Set<Role>();
-    public DbSet<Permission> Permissions => Set<Permission>();
-    public DbSet<UserRole> UserRoles => Set<UserRole>();
-    public DbSet<Policy> Policies => Set<Policy>();
-    public DbSet<ResourceAcl> ResourceAcls => Set<ResourceAcl>();
+    public DbSet<Role>             Roles             => Set<Role>();
+    public DbSet<Permission>       Permissions       => Set<Permission>();
+    public DbSet<UserRole>         UserRoles         => Set<UserRole>();
+    public DbSet<Policy>           Policies          => Set<Policy>();
+    public DbSet<ResourceAcl>      ResourceAcls      => Set<ResourceAcl>();
 
     // ── Resource ──────────────────────────────────────────────────────────────
-    public DbSet<Document> Documents => Set<Document>();
-    public DbSet<DocumentVersion> DocumentVersions => Set<DocumentVersion>();
-    public DbSet<Folder> Folders => Set<Folder>();
+    public DbSet<Document>         Documents         => Set<Document>();
+    public DbSet<DocumentVersion>  DocumentVersions  => Set<DocumentVersion>();
+    public DbSet<Folder>           Folders           => Set<Folder>();
     public DbSet<MetadataTemplate> MetadataTemplates => Set<MetadataTemplate>();
-    public DbSet<MetadataValue> MetadataValues => Set<MetadataValue>();
-    public DbSet<DocumentShare> DocumentShares => Set<DocumentShare>();
-    public DbSet<LegalHold> LegalHolds => Set<LegalHold>();
+    public DbSet<MetadataValue>    MetadataValues    => Set<MetadataValue>();
+    public DbSet<DocumentShare>    DocumentShares    => Set<DocumentShare>();
+    public DbSet<LegalHold>        LegalHolds        => Set<LegalHold>();
 
     // ── Knowledge ─────────────────────────────────────────────────────────────
-    public DbSet<KnowledgeItem> KnowledgeItems => Set<KnowledgeItem>();
-    public DbSet<KnowledgeChunk> KnowledgeChunks => Set<KnowledgeChunk>();
+    public DbSet<KnowledgeItem>     KnowledgeItems     => Set<KnowledgeItem>();
+    public DbSet<KnowledgeChunk>    KnowledgeChunks    => Set<KnowledgeChunk>();
     public DbSet<KnowledgeRelation> KnowledgeRelations => Set<KnowledgeRelation>();
-    public DbSet<KnowledgePack> KnowledgePacks => Set<KnowledgePack>();
+    public DbSet<KnowledgePack>     KnowledgePacks     => Set<KnowledgePack>();
 
     // ── Agent ─────────────────────────────────────────────────────────────────
-    public DbSet<Domain.Agent.Agent> Agents => Set<Domain.Agent.Agent>();
-    public DbSet<AgentVersion> AgentVersions => Set<AgentVersion>();
-    public DbSet<AgentExecution> AgentExecutions => Set<AgentExecution>();
-    public DbSet<AgentMemory> AgentMemories => Set<AgentMemory>();
-    public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
+    public DbSet<Domain.Agent.Agent> Agents          => Set<Domain.Agent.Agent>();
+    public DbSet<AgentVersion>       AgentVersions   => Set<AgentVersion>();
+    public DbSet<AgentExecution>     AgentExecutions => Set<AgentExecution>();
+    public DbSet<AgentMemory>        AgentMemories   => Set<AgentMemory>();
+    public DbSet<PromptTemplate>     PromptTemplates => Set<PromptTemplate>();
 
     // ── Workflow ──────────────────────────────────────────────────────────────
-    public DbSet<WorkflowDefinition> WorkflowDefinitions => Set<WorkflowDefinition>();
+    public DbSet<WorkflowDefinition>        WorkflowDefinitions        => Set<WorkflowDefinition>();
     public DbSet<WorkflowDefinitionVersion> WorkflowDefinitionVersions => Set<WorkflowDefinitionVersion>();
-    public DbSet<WorkflowInstance> WorkflowInstances => Set<WorkflowInstance>();
-    public DbSet<WorkflowTask> WorkflowTasks => Set<WorkflowTask>();
+    public DbSet<WorkflowInstance>          WorkflowInstances          => Set<WorkflowInstance>();
+    public DbSet<WorkflowTask>              WorkflowTasks              => Set<WorkflowTask>();
 
     // ── Search ────────────────────────────────────────────────────────────────
     public DbSet<SavedSearch> SavedSearches => Set<SavedSearch>();
-    public DbSet<Embedding> Embeddings => Set<Embedding>();
+    public DbSet<Embedding>   Embeddings    => Set<Embedding>();
 
     // ── Analytics ─────────────────────────────────────────────────────────────
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
 
-    // ── Notifications ─────────────────────────────────────────────────────────
-    public DbSet<Domain.Notification.Notification> Notifications => Set<Domain.Notification.Notification>();
-    public DbSet<NotificationTemplate> NotificationTemplates => Set<NotificationTemplate>();
+    // ── Notification ──────────────────────────────────────────────────────────
+    public DbSet<Domain.Notification.Notification> Notifications       => Set<Domain.Notification.Notification>();
+    public DbSet<NotificationTemplate>             NotificationTemplates => Set<NotificationTemplate>();
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // MODEL CREATION
+    // ═══════════════════════════════════════════════════════════════════════════
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
-        // Apply all IEntityTypeConfiguration<T> from this assembly
+        // Applique toutes les IEntityTypeConfiguration<T> de l'assembly
         modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
 
-        // ── Global Query Filters — Applied automatically to ALL ITenantScoped entities ──
-        // This architectural constraint makes cross-tenant data leakage impossible.
+        // Global Query Filters : isolement tenant + soft-delete
+        // Chaque type concret héritant de TenantEntity reçoit les deux filtres combinés
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {
             var clrType = entityType.ClrType;
-            if (!typeof(TenantEntity).IsAssignableFrom(clrType)) continue;
+            if (clrType.IsAbstract || !typeof(TenantEntity).IsAssignableFrom(clrType))
+                continue;
 
-            // Filter 1: Tenant isolation
-            var tenantFilter = CreateTenantFilter(clrType);
-            // Filter 2: Soft delete exclusion
-            var softDeleteFilter = CreateSoftDeleteFilter(clrType);
+            var parameter = System.Linq.Expressions.Expression.Parameter(clrType, "e");
+            var isDeletedProp = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.IsDeleted));
+            var orgIdProp     = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.OrganizationId));
 
-            // Combine both filters
-            modelBuilder.Entity(clrType).HasQueryFilter(
-                CombineFilters(clrType, tenantFilter, softDeleteFilter));
+            // Capture the context via closure so the filter is evaluated per-request
+            var ctx = _tenantContext;
+            var orgIdValue = System.Linq.Expressions.Expression.Property(
+                System.Linq.Expressions.Expression.Constant(ctx),
+                nameof(ITenantContext.OrganizationId));
+
+            var notDeleted  = System.Linq.Expressions.Expression.Not(isDeletedProp);
+            var tenantMatch = System.Linq.Expressions.Expression.Equal(orgIdProp, orgIdValue);
+            var combined    = System.Linq.Expressions.Expression.AndAlso(notDeleted, tenantMatch);
+            var lambda      = System.Linq.Expressions.Expression.Lambda(combined, parameter);
+
+            modelBuilder.Entity(clrType).HasQueryFilter(lambda);
         }
     }
 
-    private static System.Linq.Expressions.LambdaExpression CreateTenantFilter(Type entityType)
-    {
-        // Builds: e => e.OrganizationId == _tenantContext.OrganizationId
-        var parameter = System.Linq.Expressions.Expression.Parameter(entityType, "e");
-        var orgIdProperty = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.OrganizationId));
-        // We'll use a constant check that's set per-request via the context
-        return System.Linq.Expressions.Expression.Lambda(
-            System.Linq.Expressions.Expression.Equal(
-                orgIdProperty,
-                System.Linq.Expressions.Expression.Constant(Guid.Empty) // Placeholder — overridden at query time
-            ), parameter);
-    }
-
-    private static System.Linq.Expressions.LambdaExpression CreateSoftDeleteFilter(Type entityType)
-    {
-        var parameter = System.Linq.Expressions.Expression.Parameter(entityType, "e");
-        var isDeletedProperty = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.IsDeleted));
-        return System.Linq.Expressions.Expression.Lambda(
-            System.Linq.Expressions.Expression.Not(isDeletedProperty), parameter);
-    }
-
-    private System.Linq.Expressions.LambdaExpression CombineFilters(Type entityType,
-        System.Linq.Expressions.LambdaExpression tenantFilter,
-        System.Linq.Expressions.LambdaExpression softDeleteFilter)
-    {
-        // For simplicity with in-memory, we use a simpler approach:
-        // Return lambda: e => !e.IsDeleted && e.OrganizationId == currentTenantId
-        var parameter = System.Linq.Expressions.Expression.Parameter(entityType, "e");
-        var isDeletedProp = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.IsDeleted));
-        var orgIdProp = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.OrganizationId));
-
-        // We capture _tenantContext to enable dynamic filtering
-        var tenantCtx = _tenantContext;
-        var orgIdExpr = System.Linq.Expressions.Expression.Property(
-            System.Linq.Expressions.Expression.Constant(tenantCtx),
-            nameof(ITenantContext.OrganizationId));
-
-        var notDeleted = System.Linq.Expressions.Expression.Not(isDeletedProp);
-        var tenantMatch = System.Linq.Expressions.Expression.Equal(orgIdProp, orgIdExpr);
-        var combined = System.Linq.Expressions.Expression.AndAlso(notDeleted, tenantMatch);
-
-        return System.Linq.Expressions.Expression.Lambda(combined, parameter);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
-    // SaveChanges Interception — Inject OrganizationId, Audit fields, Soft Delete
+    // SAVE CHANGES — Hydrate automatic audit fields
     // ═══════════════════════════════════════════════════════════════════════════
 
-    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    public override async Task<int> SaveChangesAsync(CancellationToken ct = default)
     {
-        var currentUserId = _currentUser.UserId;
-        var organizationId = _tenantContext.IsResolved ? _tenantContext.OrganizationId : Guid.Empty;
+        var actorId  = _currentUser.UserId;
+        var orgId    = _tenantContext.IsResolved ? _tenantContext.OrganizationId : Guid.Empty;
 
         foreach (var entry in ChangeTracker.Entries<TenantEntity>())
         {
@@ -179,35 +144,36 @@ public sealed class EaiosDbContext : DbContext
             {
                 case EntityState.Added:
                     if (entry.Entity.Id == Guid.Empty)
-                        entry.Entity.GetType().GetProperty(nameof(TenantEntity.Id))!
-                            .SetValue(entry.Entity, Guid.CreateVersion7());
-                    // Use internal setter via reflection (private set pattern)
-                    InvokeInternal(entry.Entity, "SetOrganizationId", organizationId);
-                    InvokeInternal(entry.Entity, "SetCreated", currentUserId);
+                        SetProperty(entry.Entity, nameof(TenantEntity.Id), Guid.CreateVersion7());
+                    InvokePrivate(entry.Entity, "SetOrganizationId", orgId);
+                    InvokePrivate(entry.Entity, "SetCreated", actorId);
                     break;
 
                 case EntityState.Modified:
-                    InvokeInternal(entry.Entity, "SetUpdated", currentUserId);
-
-                    // Intercept soft-delete: if IsDeleted was changed to true
+                    InvokePrivate(entry.Entity, "SetUpdated", actorId);
+                    // Soft-delete interception : si IsDeleted passe à true, on enrichit les champs
                     if (entry.Property(nameof(TenantEntity.IsDeleted)).IsModified
                         && entry.Entity.IsDeleted
-                        && entry.OriginalValues.GetValue<bool>(nameof(TenantEntity.IsDeleted)) == false)
+                        && !entry.OriginalValues.GetValue<bool>(nameof(TenantEntity.IsDeleted)))
                     {
-                        InvokeInternal(entry.Entity, "SetSoftDeleted", currentUserId);
-                        entry.State = EntityState.Modified;
+                        InvokePrivate(entry.Entity, "SetSoftDeleted", actorId);
                     }
                     break;
             }
         }
 
-        return await base.SaveChangesAsync(cancellationToken);
+        return await base.SaveChangesAsync(ct);
     }
 
-    private static void InvokeInternal(object entity, string methodName, params object?[] args)
+    private static void SetProperty(object entity, string name, object value)
     {
-        var method = entity.GetType()
-            .GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-        method?.Invoke(entity, args);
+        entity.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.Instance)!.SetValue(entity, value);
+    }
+
+    private static void InvokePrivate(object entity, string method, params object?[] args)
+    {
+        entity.GetType()
+              .GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+              ?.Invoke(entity, args);
     }
 }

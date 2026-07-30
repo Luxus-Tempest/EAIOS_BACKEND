@@ -1,72 +1,111 @@
+using EAIOS.Api.Application.Common.Interfaces;
 using System.Security.Claims;
-using EAIOS.Api.Infrastructure;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Filters;
 
 namespace EAIOS.Api.Middleware;
 
-public sealed class CurrentTenant
+/// <summary>
+/// Contexte de requête courant — implémente ICurrentUser depuis les claims JWT.
+/// Scoped par requête HTTP.
+/// </summary>
+public sealed class RequestContext(IHttpContextAccessor http) : ICurrentUser
 {
-    public Guid? Id { get; internal set; }
-}
+    private ClaimsPrincipal? Principal => http.HttpContext?.User;
 
-public sealed class CorrelationIdMiddleware(RequestDelegate next)
-{
-    public async Task Invoke(HttpContext context)
+    public Guid? UserId
     {
-        var correlationId = context.Request.Headers["X-Correlation-ID"].FirstOrDefault() ?? Guid.CreateVersion7().ToString();
-        context.TraceIdentifier = correlationId;
-        context.Response.Headers["X-Correlation-ID"] = correlationId;
-        await next(context);
-    }
-}
-
-public sealed class BearerTokenMiddleware(RequestDelegate next)
-{
-    public async Task Invoke(HttpContext context, TokenService tokens, InMemoryEaiosStore store)
-    {
-        var value = context.Request.Headers.Authorization.FirstOrDefault();
-        if (value?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) == true)
+        get
         {
-            var payload = tokens.Validate(value[7..]);
-            if (payload is not null && store.Sessions.TryGetValue(payload.SessionId, out var session) && !session.IsRevoked && session.ExpiresAt > DateTimeOffset.UtcNow)
-            {
-                var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, payload.UserId.ToString()), new("tenant_id", payload.OrganizationId.ToString()) };
-                claims.AddRange(payload.Roles.Select(role => new Claim(ClaimTypes.Role, role)));
-                context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Bearer"));
-            }
+            var val = Principal?.FindFirstValue(ClaimTypes.NameIdentifier)
+                   ?? Principal?.FindFirstValue("sub");
+            return Guid.TryParse(val, out var id) ? id : null;
         }
-        await next(context);
     }
+
+    public Guid? OrganizationId
+    {
+        get
+        {
+            var val = Principal?.FindFirstValue("org_id");
+            return Guid.TryParse(val, out var id) ? id : null;
+        }
+    }
+
+    public string? Email =>
+        Principal?.FindFirstValue(ClaimTypes.Email) ??
+        Principal?.FindFirstValue("email");
+
+    public bool IsAuthenticated => Principal?.Identity?.IsAuthenticated == true;
+
+    public bool IsPlatformAdmin =>
+        HasRole("platform.admin") || HasRole("platform.owner");
+
+    public bool IsOrganizationAdmin =>
+        HasRole("org.admin") || HasRole(Domain.AccessControl.SystemRoles.OrgAdmin);
+
+    public IReadOnlyList<string> Roles =>
+        Principal?.FindAll(ClaimTypes.Role).Select(c => c.Value).Distinct().ToList()
+        ?? (IReadOnlyList<string>)[];
+
+    public IReadOnlyList<string> Permissions =>
+        Principal?.FindAll("permission").Select(c => c.Value).Distinct().ToList()
+        ?? (IReadOnlyList<string>)[];
+
+    public bool HasRole(string role) =>
+        Roles.Contains(role, StringComparer.OrdinalIgnoreCase);
+
+    public bool HasPermission(string permission) =>
+        Permissions.Contains(permission, StringComparer.OrdinalIgnoreCase);
 }
 
+/// <summary>
+/// Middleware de résolution du tenant depuis le claim JWT ou l'en-tête HTTP.
+/// Doit être exécuté APRÈS l'authentification JWT.
+/// </summary>
 public sealed class TenantResolutionMiddleware(RequestDelegate next)
 {
-    public async Task Invoke(HttpContext context, CurrentTenant tenant)
+    public async Task InvokeAsync(HttpContext context, ITenantContext tenantContext, ICurrentUser currentUser)
     {
-        var claimTenant = context.User.FindFirstValue("tenant_id");
-        var headerTenant = context.Request.Headers["X-Tenant-ID"].FirstOrDefault();
-        if (Guid.TryParse(claimTenant ?? headerTenant, out var id)) tenant.Id = id;
+        // Priorité 1 : claim org_id du JWT
+        if (currentUser.OrganizationId.HasValue && currentUser.OrganizationId != Guid.Empty)
+        {
+            tenantContext.SetTenant(currentUser.OrganizationId.Value);
+        }
+        // Priorité 2 : header X-Organization-ID
+        else if (context.Request.Headers.TryGetValue("X-Organization-ID", out var orgHeader)
+                 && Guid.TryParse(orgHeader, out var orgId))
+        {
+            tenantContext.SetTenant(orgId);
+        }
+        // Priorité 3 : header X-Tenant-ID (compatibilité)
+        else if (context.Request.Headers.TryGetValue("X-Tenant-ID", out var tenantHeader)
+                 && Guid.TryParse(tenantHeader, out var tenantId))
+        {
+            tenantContext.SetTenant(tenantId);
+        }
+
         await next(context);
     }
 }
 
-/// <summary>Enforces tenant isolation for every versioned endpoint except public auth flows.</summary>
-public sealed class RequireTenantFilter : IAsyncAuthorizationFilter
+/// <summary>
+/// Middleware Correlation ID : assign un ID unique à chaque requête et le propage en réponse.
+/// </summary>
+public sealed class CorrelationIdMiddleware(RequestDelegate next)
 {
-    public Task OnAuthorizationAsync(AuthorizationFilterContext context)
-    {
-        var path = context.HttpContext.Request.Path;
-        if (!path.StartsWithSegments("/v1") || path.StartsWithSegments("/v1/auth")) return Task.CompletedTask;
-        var tenant = context.HttpContext.RequestServices.GetRequiredService<CurrentTenant>();
-        if (tenant.Id is null)
-            context.Result = new ObjectResult(new ProblemDetails { Status = StatusCodes.Status400BadRequest, Title = "Tenant context is required", Detail = "Supply a valid bearer token or X-Tenant-ID header." }) { StatusCode = StatusCodes.Status400BadRequest };
-        return Task.CompletedTask;
-    }
-}
+    private const string HeaderName = "X-Correlation-ID";
 
-public static class PrincipalExtensions
-{
-    public static Guid UserId(this ClaimsPrincipal principal) => Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier) ?? throw new UnauthorizedAccessException());
-    public static bool IsOrganizationAdmin(this ClaimsPrincipal principal) => principal.IsInRole("org.admin");
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (!context.Request.Headers.TryGetValue(HeaderName, out var incoming)
+            || string.IsNullOrWhiteSpace(incoming))
+        {
+            incoming = Guid.CreateVersion7().ToString("N");
+        }
+
+        var correlationId = incoming.ToString();
+        context.Items[HeaderName]       = correlationId;
+        context.Response.Headers[HeaderName] = correlationId;
+
+        await next(context);
+    }
 }
