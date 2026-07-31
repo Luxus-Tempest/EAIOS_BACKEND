@@ -1,0 +1,81 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.EntityFrameworkCore.Database.Command": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+
+  "// Mode de base de données": "Mettre false pour PostgreSQL en production, true pour le mode In-Memory local",
+  "UseInMemoryDatabase": false,
+
+  "ConnectionStrings": {
+    "// PostgreSQL": "Chaîne de connexion PostgreSQL production (avec SSL requis en prod)",
+    "DefaultConnection": "Host=your-postgres-host;Port=5432;Database=eaios;Username=eaios_admin;Password=YOUR_SECURE_PASSWORD;SSL Mode=Prefer;Trust Server Certificate=true;Include Error Detail=false"
+  },
+
+  "Security": {
+    "// Clé de signature JWT": "OBLIGATOIRE en Production: Générer une chaîne aléatoire sécurisée de 64+ caractères",
+    "TokenSigningKey": "GENERATE_A_VERY_LONG_AND_SECURE_RANDOM_STRING_HERE_AT_LEAST_64_CHARACTERS",
+    "AccessTokenLifetimeMinutes": 15,
+    "RefreshTokenLifetimeDays": 7,
+    "MfaSessionLifetimeMinutes": 5,
+    "PasswordResetTokenLifetimeHours": 1,
+    "EmailVerificationTokenLifetimeHours": 24,
+    "MaxFailedLoginAttempts": 5,
+    "LockoutDurationMinutes": 15,
+    "ApiKeyPrefix": "eak"
+  },
+
+  "Storage": {
+    "// Options Provider": "Local | MinIO | S3 | AzureBlob",
+    "Provider": "Local",
+    "LocalBasePath": "uploads",
+    "BaseUrl": "https://api.yourdomain.com/uploads",
+
+    "// Configuration S3 / MinIO (si Provider = MinIO ou S3)": "",
+    "S3": {
+      "ServiceUrl": "https://minio.yourdomain.com",
+      "BucketName": "eaios-resources",
+      "AccessKey": "YOUR_MINIO_ACCESS_KEY",
+      "SecretKey": "YOUR_MINIO_SECRET_KEY",
+      "Region": "us-east-1"
+    },
+
+    "MaxFileSizeBytes": 52428800,
+    "MaxMultipartFileSizeBytes": 5368709120,
+    "ChunkSizeBytes": 5242880,
+    "AllowedExtensions": [
+      ".pdf", ".docx", ".xlsx", ".pptx", ".odt", ".ods",
+      ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".tiff",
+      ".mp4", ".avi", ".mov", ".mp3", ".wav",
+      ".json", ".xml", ".csv", ".yaml", ".yml", ".txt", ".md",
+      ".zip", ".tar", ".7z"
+    ]
+  },
+
+  "Ai": {
+    "// Options Provider": "Stub | OpenAi | AzureOpenAi | Anthropic | Mistral",
+    "Provider": "OpenAi",
+    "ApiKey": "YOUR_OPENAI_API_KEY",
+    "Endpoint": "https://api.openai.com/v1",
+    "DefaultModel": "gpt-4o",
+    "DefaultEmbeddingModel": "text-embedding-3-large",
+    "EmbeddingDimensions": 3072
+  },
+
+  "RateLimit": {
+    "Auth": { "WindowSeconds": 60, "PermitLimit": 10 },
+    "ForgotPassword": { "WindowSeconds": 3600, "PermitLimit": 5 },
+    "Global": { "WindowSeconds": 60, "PermitLimit": 1000 }
+  },
+
+  "Cors": {
+    "AllowedOrigins": [
+      "https://app.yourdomain.com",
+      "https://admin.yourdomain.com"
+    ]
+  }
+}
