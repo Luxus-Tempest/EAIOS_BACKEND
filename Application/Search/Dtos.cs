@@ -100,3 +100,11 @@ public sealed record CreateSavedSearchRequest(
     bool AlertEnabled = false,
     string? AlertFrequency = null,
     string? Description = null);
+
+public sealed record SuggestRequest(string Query);
+
+public sealed record SaveSearchRequest(
+    string Name,
+    string Query,
+    string? Filters = null,
+    bool IsShared = false);

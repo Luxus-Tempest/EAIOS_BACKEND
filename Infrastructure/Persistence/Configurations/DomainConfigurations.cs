@@ -22,10 +22,9 @@ public sealed class WorkspaceConfiguration : IEntityTypeConfiguration<Workspace>
         b.ToTable("workspaces", "organization");
         b.HasKey(w => w.Id); b.Property(w => w.Id).ValueGeneratedNever();
         b.Property(w => w.Name).HasMaxLength(200).IsRequired();
-        b.Property(w => w.Slug).HasMaxLength(100).IsRequired();
         b.Property(w => w.Status).HasConversion<string>().HasMaxLength(30);
-        b.Property(w => w.Visibility).HasConversion<string>().HasMaxLength(30);
-        b.HasIndex(w => new { w.OrganizationId, w.Slug }).IsUnique();
+        b.Property(w => w.Type).HasConversion<string>().HasMaxLength(30);
+        b.HasIndex(w => new { w.OrganizationId, w.Name });
     }
 }
 
@@ -48,7 +47,7 @@ public sealed class MembershipConfiguration : IEntityTypeConfiguration<Membershi
     {
         b.ToTable("memberships", "organization");
         b.HasKey(m => m.Id); b.Property(m => m.Id).ValueGeneratedNever();
-        b.Property(m => m.Role).HasConversion<string>().HasMaxLength(30);
+        b.Property(m => m.Type).HasConversion<string>().HasMaxLength(30);
         b.Property(m => m.Status).HasConversion<string>().HasMaxLength(30);
         b.HasIndex(m => new { m.UserId, m.WorkspaceId, m.DepartmentId });
     }
@@ -125,7 +124,6 @@ public sealed class DocumentConfiguration : IEntityTypeConfiguration<Document>
         b.HasIndex(d => new { d.OrganizationId, d.Status });
         b.HasMany(d => d.Versions).WithOne().HasForeignKey(v => v.DocumentId);
         b.HasMany(d => d.Shares).WithOne().HasForeignKey(s => s.DocumentId);
-        b.HasMany(d => d.LegalHolds).WithOne().HasForeignKey(h => h.DocumentId);
     }
 }
 

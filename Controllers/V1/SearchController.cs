@@ -26,27 +26,26 @@ public sealed class SearchController(
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var docQuery = new DocumentQuery(req.Query, WorkspaceId: req.WorkspaceId, Page: req.Page, PageSize: req.PageSize);
+        var docQuery = new DocumentQuery(req.Query, WorkspaceId: req.Filters?.WorkspaceId, Page: req.Page, PageSize: req.PageSize);
         var docs  = await documentRepo.SearchAsync(docQuery, ct);
         var items = await knowledgeRepo.SearchAsync(req.Query, null, Domain.Knowledge.KnowledgeItemStatus.Published, null, req.Page, req.PageSize, ct);
 
-        var results = new List<SearchResultItem>();
+        var results = new List<dynamic>();
 
-        results.AddRange(docs.Items.Select(d => new SearchResultItem(
-            d.Id, "document", d.Title, $"Document • {d.MimeType}", d.CreatedAt, 0.8f)));
+        results.AddRange(docs.Items.Select(d => new {
+            Id = d.Id, Type = "document", Title = d.Title, Summary = $"Document • {d.MimeType}", CreatedAt = d.CreatedAt, Score = 0.8f }));
 
-        results.AddRange(items.Items.Select(k => new SearchResultItem(
-            k.Id, "knowledge", k.Title, $"Connaissance • {k.Type}", k.CreatedAt, 0.75f)));
+        results.AddRange(items.Items.Select(k => new {
+            Id = k.Id, Type = "knowledge", Title = k.Title, Summary = $"Connaissance • {k.Type}", CreatedAt = k.CreatedAt, Score = 0.75f }));
 
-        // Tri par score sémantique approx (stub)
-        results = results.OrderByDescending(r => r.Score).Take(req.PageSize).ToList();
+        var sortedResults = results.OrderByDescending(r => r.Score).Take(req.PageSize).ToList();
 
         var total = docs.TotalCount + items.TotalCount;
 
         // Incrémenter compteur si saved search
         // (à implémenter avec background service en production)
 
-        return OkList(results, total, req.Page, req.PageSize);
+        return OkList(sortedResults, total, req.Page, req.PageSize);
     }
 
     // ── POST /api/v1/search/suggestions ──────────────────────────────────────
@@ -114,7 +113,7 @@ public sealed class SearchController(
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var saved = SavedSearch.Create(TenantId, ActorId.Value, req.Name, req.Query, req.Filters, req.IsShared);
+        var saved = SavedSearch.Create(TenantId, ActorId.Value, req.Name, req.Query, Domain.Search.SearchType.Basic, req.Filters, isShared: req.IsShared);
         await savedSearchRepo.AddAsync(saved, ct);
         await savedSearchRepo.SaveAsync(ct);
         return Ok200(MapSaved(saved));
@@ -134,6 +133,6 @@ public sealed class SearchController(
     // ── Mappers ───────────────────────────────────────────────────────────────
     private static object MapSaved(SavedSearch s) => new
     {
-        s.Id, s.Name, s.Query, s.IsShared, s.LastExecutedAt, s.CreatedAt
+        s.Id, s.Name, s.QueryText, s.IsShared, s.LastExecutedAt, s.CreatedAt
     };
 }

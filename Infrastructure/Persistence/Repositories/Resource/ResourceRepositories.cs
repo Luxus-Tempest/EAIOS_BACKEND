@@ -42,7 +42,6 @@ public sealed class DocumentRepository(EaiosDbContext db) : RepositoryBase<Docum
                  .Include(d => d.Versions)
                  .Include(d => d.Shares)
                  .Include(d => d.MetadataValues)
-                 .Include(d => d.LegalHolds)
                  .FirstOrDefaultAsync(d => d.Id == id, ct);
 
     public async Task<PagedResult<Document>> SearchAsync(DocumentQuery q, CancellationToken ct = default)
@@ -69,7 +68,7 @@ public sealed class DocumentRepository(EaiosDbContext db) : RepositoryBase<Docum
 
     public async Task<IReadOnlyList<Document>> GetTrashedAsync(CancellationToken ct = default) =>
         await Set.IgnoreQueryFilters()
-                 .Where(d => d.Status == ResourceStatus.Trashed && d.OrganizationId == db.Database.CurrentTransaction != null ? Guid.Empty : Guid.Empty)
+                 .Where(d => d.Status == ResourceStatus.Trashed)
                  .OrderByDescending(d => d.UpdatedAt)
                  .ToListAsync(ct);
 

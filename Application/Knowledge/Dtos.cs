@@ -46,7 +46,7 @@ public sealed record UpdateKnowledgeItemRequest(
     string[]? Tags,
     string? Language);
 
-public sealed record ValidateItemRequest(bool IsValid, string? Comment = null);
+public sealed record ValidateKnowledgeItemRequest(string? Note = null);
 
 // ── KnowledgeChunk ────────────────────────────────────────────────────────────
 
@@ -107,3 +107,23 @@ public sealed record GraphRelationDto(
     float? ConfidenceScore);
 
 public sealed record GraphQueryRequest(string Query, Dictionary<string, object>? Parameters = null);
+
+public sealed record CreateKnowledgePackRequest(
+    string Name,
+    string? Description = null,
+    bool IsPublic = false);
+
+public sealed record AskRequest(
+    string Question,
+    Guid? PackId = null);
+
+public sealed record AskResponse(
+    string Answer,
+    IReadOnlyList<SourceRef> Sources,
+    int PromptTokens,
+    int CompletionTokens);
+
+public sealed record SourceRef(
+    Guid Id,
+    string Title,
+    KnowledgeItemType Type);

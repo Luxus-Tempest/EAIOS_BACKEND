@@ -13,7 +13,7 @@ public sealed record VerifyEmailRequest(string Token, string Email);
 public sealed record ForgotPasswordRequest(string Email);
 public sealed record ResetPasswordRequest(string Email, string Token, string NewPassword);
 public sealed record ChangePasswordRequest(string CurrentPassword, string NewPassword);
-public sealed record EnableTotpRequest(string Code);
+public sealed record EnableTotpRequest(string Secret, string Code, string[] BackupCodes);
 public sealed record DisableMfaRequest(string Password);
 
 // ── Auth Responses ────────────────────────────────────────────────────────────
@@ -25,6 +25,11 @@ public sealed record LoginResponse(
     UserDto User,
     bool RequiresMfa = false,
     string? MfaToken = null);
+
+public sealed record RefreshResponse(
+    string AccessToken,
+    string RefreshToken,
+    int ExpiresIn);
 
 public sealed record MfaSetupDto(
     string Secret,

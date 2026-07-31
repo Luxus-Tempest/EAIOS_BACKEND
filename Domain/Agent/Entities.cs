@@ -288,6 +288,7 @@ public sealed class AgentMemory : TenantEntity
     }
 
     public void RecordAccess() { LastAccessedAt = DateTime.UtcNow; AccessCount++; }
+    public void UpdateContent(string content, float? importanceScore = null) { Content = content; if (importanceScore.HasValue) ImportanceScore = importanceScore; }
     public void SetQdrantId(string pointId) => QdrantPointId = pointId;
 }
 

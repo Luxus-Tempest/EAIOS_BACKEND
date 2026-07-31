@@ -96,4 +96,24 @@ public sealed record CompleteTaskRequest(
     string? Comment = null,
     Dictionary<string, object>? FormData = null);
 
-public sealed record ReassignTaskRequest(Guid NewAssigneeId, WorkflowTaskAssigneeType AssigneeType = WorkflowTaskAssigneeType.User);
+public sealed record ReassignTaskRequest(Guid NewAssigneeId, EAIOS.Api.Domain.Workflow.WorkflowTaskAssigneeType AssigneeType = EAIOS.Api.Domain.Workflow.WorkflowTaskAssigneeType.User);
+
+public sealed record CreateWorkflowDefinitionRequest(
+    string Name,
+    string? Description = null,
+    string? Category = null,
+    string NodesJson = "[]",
+    string EdgesJson = "[]",
+    EAIOS.Api.Domain.Workflow.WorkflowTriggerType TriggerType = EAIOS.Api.Domain.Workflow.WorkflowTriggerType.Manual,
+    string? TriggerConfig = null);
+
+public sealed record UpdateWorkflowDefinitionRequest(
+    string? Name = null,
+    string? Description = null,
+    string? Category = null,
+    string? NodesJson = null,
+    string? EdgesJson = null);
+
+
+
+public sealed record CancelWorkflowRequest(string? Reason = null);

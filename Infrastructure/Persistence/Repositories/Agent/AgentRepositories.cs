@@ -67,6 +67,7 @@ public sealed class AgentExecutionRepository(EaiosDbContext db) : RepositoryBase
 
 public interface IAgentMemoryRepository
 {
+    Task<AgentMemory?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<AgentMemory?> FindByKeyAsync(Guid agentId, Guid? userId, AgentMemoryType type, string key, CancellationToken ct = default);
     Task<IReadOnlyList<AgentMemory>> GetByAgentAsync(Guid agentId, Guid? userId, AgentMemoryType? type, CancellationToken ct = default);
     Task AddAsync(AgentMemory memory, CancellationToken ct = default);

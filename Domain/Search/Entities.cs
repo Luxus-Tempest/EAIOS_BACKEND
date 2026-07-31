@@ -25,7 +25,7 @@ public sealed class SavedSearch : TenantEntity
 
     public static SavedSearch Create(Guid organizationId, Guid userId, string name,
         string queryText, SearchType searchType, string? filtersJson = null,
-        bool alertEnabled = false, string? alertFrequency = null)
+        bool alertEnabled = false, string? alertFrequency = null, bool isShared = false)
     {
         var s = new SavedSearch
         {
@@ -36,7 +36,8 @@ public sealed class SavedSearch : TenantEntity
             SearchType = searchType,
             FiltersJson = filtersJson ?? "{}",
             AlertEnabled = alertEnabled,
-            AlertFrequency = alertFrequency
+            AlertFrequency = alertFrequency,
+            IsShared = isShared
         };
         s.SetOrganizationId(organizationId);
         s.SetCreated(userId);

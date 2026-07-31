@@ -58,6 +58,6 @@ public sealed class PermissionService(
     }
 
     private static bool MatchesPrincipal(Policy p, Guid userId) =>
-        p.PrincipalType == PrincipalType.AllUsers ||
+        p.PrincipalType == PrincipalType.All ||
         (p.PrincipalType == PrincipalType.User && p.PrincipalId == userId.ToString());
 }

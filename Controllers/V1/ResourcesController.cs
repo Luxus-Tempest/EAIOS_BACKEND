@@ -39,7 +39,7 @@ public sealed class ResourcesController(
         if (!ActorId.HasValue) return Unauthorized();
 
         var parent = req.ParentId.HasValue ? await folderRepo.GetByIdAsync(req.ParentId.Value, ct) : null;
-        var folder = Folder.Create(TenantId, req.Name, req.ParentId, req.WorkspaceId, req.DepartmentId, ActorId.Value, parent?.Path, parent?.Depth ?? 0);
+        var folder = Folder.Create(TenantId, req.Name, ActorId.Value, req.ParentId, parent?.Path ?? "/", parent?.Depth ?? 0, req.WorkspaceId, req.DepartmentId);
 
         await folderRepo.AddAsync(folder, ct);
         await folderRepo.SaveAsync(ct);
@@ -105,10 +105,10 @@ public sealed class ResourcesController(
         var result = await storage.UploadAsync(stream, file.FileName, file.ContentType, TenantId.ToString(), ct);
 
         var doc = Document.Create(
-            TenantId, file.FileName, file.ContentType, result.StorageKey,
-            file.Length, folderId, workspaceId, ActorId.Value, classification);
+            TenantId, file.FileName, ActorId.Value,
+            classification: classification, folderId: folderId, workspaceId: workspaceId);
 
-        var version = DocumentVersion.Create(TenantId, doc.Id, 1, result.StorageKey, file.Length, ActorId.Value, result.Checksum, "Première version");
+        var version = DocumentVersion.Create(TenantId, doc.Id, 1, result.StorageKey, file.FileName, file.ContentType, file.Length, ActorId.Value, "Première version");
 
         await documentRepo.AddAsync(doc, ct);
         await versionRepo.AddAsync(version, ct);
@@ -123,7 +123,7 @@ public sealed class ResourcesController(
         var doc = await documentRepo.GetByIdAsync(id, ct);
         if (doc == null) return NotFound();
 
-        doc.UpdateMetadata(req.Title, req.Description, req.Classification);
+        doc.Update(req.Title, req.Description, req.Classification, req.Tags);
         documentRepo.Update(doc);
         await documentRepo.SaveAsync(ct);
 
@@ -180,9 +180,9 @@ public sealed class ResourcesController(
         var result = await storage.UploadAsync(stream, file.FileName, file.ContentType, TenantId.ToString(), ct);
 
         var current = versions.FirstOrDefault(v => v.IsCurrent);
-        if (current != null) { current.MarkNotCurrent(); versionRepo.Update(current); }
+        if (current != null) { current.SetAsCurrent(false); versionRepo.Update(current); }
 
-        var version = DocumentVersion.Create(TenantId, id, nextVersion, result.StorageKey, file.Length, ActorId.Value, result.Checksum, changeNote);
+        var version = DocumentVersion.Create(TenantId, id, nextVersion, result.StorageKey, file.FileName, file.ContentType, file.Length, ActorId.Value, changeNote);
         await versionRepo.AddAsync(version, ct);
         await versionRepo.SaveAsync(ct);
 
@@ -198,7 +198,7 @@ public sealed class ResourcesController(
         var doc = await documentRepo.GetByIdAsync(id, ct);
         if (doc == null) return NotFound();
 
-        var share = DocumentShare.Create(TenantId, id, ActorId.Value, req.Type, req.ExpiresAt, req.PermissionLevel, req.Password);
+        var share = DocumentShare.CreateInternal(TenantId, id, req.TargetType, req.TargetId ?? Guid.Empty, req.Permission, ActorId.Value, req.ExpiresAt);
         await shareRepo.AddAsync(share, ct);
         await shareRepo.SaveAsync(ct);
 
@@ -210,8 +210,7 @@ public sealed class ResourcesController(
     {
         var share = await shareRepo.GetByIdAsync(shareId, ct);
         if (share == null || share.DocumentId != id) return NotFound();
-        share.Revoke();
-        shareRepo.Update(share);
+        shareRepo.SoftDelete(share);
         await shareRepo.SaveAsync(ct);
         return NoContent204();
     }
@@ -222,7 +221,7 @@ public sealed class ResourcesController(
     public async Task<IActionResult> CreateLegalHold(Guid id, [FromBody] CreateLegalHoldRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var hold = LegalHold.Create(TenantId, id, req.CaseName, req.CaseReference, req.Reason, ActorId.Value);
+        var hold = LegalHold.Create(TenantId, id, req.Reason, ActorId.Value, req.CaseReference);
         await holdRepo.AddAsync(hold, ct);
         await holdRepo.SaveAsync(ct);
         return Ok200(hold);
@@ -234,7 +233,7 @@ public sealed class ResourcesController(
         if (!ActorId.HasValue) return Unauthorized();
         var hold = await holdRepo.GetByIdAsync(holdId, ct);
         if (hold == null || hold.DocumentId != id) return NotFound();
-        hold.Release(ActorId.Value, req.ReleaseReason);
+        hold.Release(ActorId.Value, req.Reason);
         holdRepo.Update(hold);
         await holdRepo.SaveAsync(ct);
         return NoContent204();
@@ -245,7 +244,7 @@ public sealed class ResourcesController(
     {
         d.Id, d.Title, d.MimeType, d.Extension, d.FileSizeBytes, d.ResourceType, d.Classification, d.Status,
         d.IndexingStatus, d.FolderId, d.WorkspaceId, d.DepartmentId, d.OwnerId, d.Language, d.Description,
-        d.StorageKey, d.CreatedAt, d.UpdatedAt
+        d.CreatedAt, d.UpdatedAt
     };
 
     private static object MapFolder(Folder f) => new
@@ -260,6 +259,6 @@ public sealed class ResourcesController(
 
     private static object MapShare(DocumentShare s) => new
     {
-        s.Id, s.DocumentId, s.Type, s.PermissionLevel, s.PublicLinkToken, s.ExpiresAt, s.IsActive, s.CreatedAt
+        s.Id, s.DocumentId, s.TargetType, s.Permission, s.PublicLinkToken, s.ExpiresAt, IsActive = !s.IsExpired, s.CreatedAt
     };
 }

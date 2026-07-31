@@ -38,7 +38,7 @@ public abstract class V1ApiController : ControllerBase
 
     protected IActionResult NoContent204() => NoContent();
 
-    protected new IActionResult NotFound(string detail = "Ressource introuvable.") =>
+    protected IActionResult NotFound(string detail = "Ressource introuvable.") =>
         base.NotFound(new ProblemDetails
         {
             Status   = StatusCodes.Status404NotFound,

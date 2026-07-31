@@ -39,10 +39,7 @@ public sealed class WorkflowsController(
     public async Task<IActionResult> CreateDefinition([FromBody] CreateWorkflowDefinitionRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var def = WorkflowDefinition.Create(TenantId, req.Name, req.Description, req.Category, ActorId.Value);
-        def.SetNodes(req.NodesJson);
-        def.SetEdges(req.EdgesJson);
-        def.SetTrigger(req.TriggerType, req.TriggerConfig);
+        var def = WorkflowDefinition.Create(TenantId, req.Name, ActorId.Value, req.Description, req.NodesJson);
 
         await definitionRepo.AddAsync(def, ct);
         await definitionRepo.SaveAsync(ct);
@@ -54,9 +51,7 @@ public sealed class WorkflowsController(
     {
         var def = await definitionRepo.GetByIdAsync(id, ct);
         if (def == null) return NotFound();
-        def.Update(req.Name, req.Description, req.Category);
-        if (req.NodesJson != null) def.SetNodes(req.NodesJson);
-        if (req.EdgesJson != null) def.SetEdges(req.EdgesJson);
+        def.Update(req.Name, req.Description, req.NodesJson, req.Category);
         definitionRepo.Update(def);
         await definitionRepo.SaveAsync(ct);
         return Ok200(MapDefinition(def));
@@ -68,7 +63,8 @@ public sealed class WorkflowsController(
         if (!ActorId.HasValue) return Unauthorized();
         var def = await definitionRepo.GetByIdAsync(id, ct);
         if (def == null) return NotFound();
-        def.Publish(ActorId.Value);
+        var versionId = Guid.CreateVersion7();
+        def.Publish(versionId, "1.0.0");
         definitionRepo.Update(def);
         await definitionRepo.SaveAsync(ct);
         return Ok200(MapDefinition(def));
@@ -106,7 +102,9 @@ public sealed class WorkflowsController(
         if (def.Status != WorkflowDefinitionStatus.Published)
             return UnprocessableEntity("Ce workflow doit être publié avant exécution.");
 
-        var instance = WorkflowInstance.Start(TenantId, id, def.PublishedVersionId, WorkflowTriggerType.Manual, ActorId.Value, req.InputDataJson);
+        var variablesJson = req.Variables != null ? System.Text.Json.JsonSerializer.Serialize(req.Variables) : "{}";
+        var instance = WorkflowInstance.Create(TenantId, id, def.PublishedVersionId ?? Guid.Empty, def.Version, req.TriggerType, ActorId.Value, variablesJson, req.DueAt);
+        instance.Start("start");
         await instanceRepo.AddAsync(instance, ct);
         await instanceRepo.SaveAsync(ct);
         return Ok200(MapInstance(instance));
@@ -124,7 +122,7 @@ public sealed class WorkflowsController(
     {
         var instance = await instanceRepo.GetByIdAsync(instanceId, ct);
         if (instance == null) return NotFound();
-        instance.Cancel(req.Reason);
+        instance.Cancel();
         instanceRepo.Update(instance);
         await instanceRepo.SaveAsync(ct);
         return Ok200(MapInstance(instance));
@@ -151,7 +149,8 @@ public sealed class WorkflowsController(
         if (task == null) return NotFound();
         if (task.AssigneeId != ActorId.Value)
             return Forbidden("Vous n'êtes pas assigné à cette tâche.");
-        task.Complete(req.Decision, req.Comment, req.OutputDataJson);
+        var formDataJson = req.FormData != null ? System.Text.Json.JsonSerializer.Serialize(req.FormData) : null;
+        task.Complete(ActorId.Value, req.Decision, req.Comment, formDataJson);
         taskRepo.Update(task);
         await taskRepo.SaveAsync(ct);
         return Ok200(MapTask(task));
@@ -162,7 +161,7 @@ public sealed class WorkflowsController(
     {
         var task = await taskRepo.GetByIdAsync(taskId, ct);
         if (task == null) return NotFound();
-        task.Reassign(req.NewAssigneeId, req.Reason);
+        task.Reassign(req.NewAssigneeId, EAIOS.Api.Domain.Workflow.WorkflowTaskAssigneeType.User);
         taskRepo.Update(task);
         await taskRepo.SaveAsync(ct);
         return Ok200(MapTask(task));
@@ -171,19 +170,19 @@ public sealed class WorkflowsController(
     // ── Mappers ───────────────────────────────────────────────────────────────
     private static object MapDefinition(WorkflowDefinition d) => new
     {
-        d.Id, d.Name, d.Description, d.Category, d.Status, d.TriggerType,
+        d.Id, d.Name, d.Description, d.Category, d.Status,
         d.PublishedVersionId, d.CreatedAt, d.UpdatedAt
     };
 
     private static object MapInstance(WorkflowInstance i) => new
     {
         i.Id, i.DefinitionId, i.Status, i.TriggerType, i.StartedAt, i.CompletedAt,
-        i.CurrentNodeId, i.SlaDeadline, i.CreatedAt
+        i.CurrentStepId, i.DueAt, i.CreatedAt
     };
 
     private static object MapTask(WorkflowTask t) => new
     {
-        t.Id, t.InstanceId, t.NodeId, t.Title, t.Description, t.Status, t.AssigneeId,
-        t.AssigneeType, t.Priority, t.DueAt, t.CompletedAt, t.Decision, t.Comment, t.CreatedAt
+        t.Id, t.InstanceId, t.StepId, t.Title, t.Instructions, t.Status, t.AssigneeId,
+        t.AssigneeType, t.DueAt, t.CompletedAt, t.Decision, t.Comment, t.CreatedAt
     };
 }

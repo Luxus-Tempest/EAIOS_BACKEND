@@ -44,8 +44,7 @@ public sealed class AgentsController(
     {
         if (!ActorId.HasValue) return Unauthorized();
         var agent = Domain.Agent.Agent.Create(
-            TenantId, req.Name, req.Type, req.DisplayName, req.Description,
-            req.SystemPrompt, req.LlmModel, ActorId.Value);
+            TenantId, req.Name, req.Type, ActorId.Value, req.Description, req.SystemPrompt);
 
         await agentRepo.AddAsync(agent, ct);
         await agentRepo.SaveAsync(ct);
@@ -57,7 +56,8 @@ public sealed class AgentsController(
     {
         var agent = await agentRepo.GetByIdAsync(id, ct);
         if (agent == null) return NotFound();
-        agent.Update(req.DisplayName, req.Description, req.SystemPrompt, req.LlmModel, req.Visibility, req.Status, req.Tags);
+        var llmConfigJson = req.LlmConfig != null ? System.Text.Json.JsonSerializer.Serialize(req.LlmConfig) : null;
+        agent.Update(req.DisplayName, req.Description, req.SystemPrompt, llmConfigJson, req.KnowledgePackIds, req.EnabledTools, req.MemoryEnabled);
         agentRepo.Update(agent);
         await agentRepo.SaveAsync(ct);
         return Ok200(MapAgent(agent));
@@ -82,23 +82,25 @@ public sealed class AgentsController(
 
         var agent = await agentRepo.GetByIdAsync(id, ct);
         if (agent == null) return NotFound();
-        if (agent.Status != AgentStatus.Active)
+        if (agent.Status != AgentStatus.Published && agent.Status != AgentStatus.Draft)
             return UnprocessableEntity("Cet agent n'est pas actif.");
 
-        var execution = AgentExecution.Start(TenantId, id, ActorId.Value, req.SessionId, req.Input);
+        Guid.TryParse(req.SessionId, out var parsedSessionId);
+        var execution = AgentExecution.Create(TenantId, id, "1.0.0", req.Input, ActorId.Value, parsedSessionId == Guid.Empty ? null : parsedSessionId);
+        execution.Start();
         await executionRepo.AddAsync(execution, ct);
         await executionRepo.SaveAsync(ct);
 
         try
         {
-            var opts = new LlmOptions(agent.LlmModel ?? "gpt-4o", agent.Temperature ?? 0.7f);
+            var opts = new LlmOptions("gpt-4o", 0.7f);
             var result = await llm.GenerateAsync(agent.SystemPrompt ?? "", req.Input, opts, ct);
 
-            execution.Complete(result.Output, result.PromptTokens, result.CompletionTokens, result.CostUsd);
+            execution.Complete(result.Output, result.PromptTokens, result.CompletionTokens, result.CostUsd, result.ModelUsed);
         }
         catch (Exception ex)
         {
-            execution.Fail(ex.Message);
+            execution.Fail("EXECUTION_FAILED", ex.Message);
         }
 
         executionRepo.Update(execution);
@@ -120,7 +122,7 @@ public sealed class AgentsController(
         Response.Headers.Append("X-Accel-Buffering", "no");
 
         await using var writer = new StreamWriter(Response.Body);
-        var opts = new LlmOptions(agent.LlmModel ?? "gpt-4o", agent.Temperature ?? 0.7f);
+        var opts = new LlmOptions("gpt-4o", 0.7f);
 
         await foreach (var chunk in llm.StreamAsync(agent.SystemPrompt ?? "", req.Input, opts, ct))
         {
@@ -147,7 +149,7 @@ public sealed class AgentsController(
     {
         if (!ActorId.HasValue) return Unauthorized();
         var memories = await memoryRepo.GetByAgentAsync(id, ActorId.Value, type, ct);
-        return Ok200(memories.Select(m => new { m.Id, m.Key, m.Value, m.Type, m.ImportanceScore, m.AccessCount, m.ExpiresAt, m.CreatedAt }).ToList());
+        return Ok200(memories.Select(m => new { m.Id, m.Key, Value = m.Content, m.Type, m.ImportanceScore, m.AccessCount, m.ExpiresAt, m.CreatedAt }).ToList());
     }
 
     [HttpPost("{id:guid}/memory")]
@@ -158,12 +160,12 @@ public sealed class AgentsController(
         var existing = await memoryRepo.FindByKeyAsync(id, ActorId.Value, req.Type, req.Key, ct);
         if (existing != null)
         {
-            existing.UpdateValue(req.Value, req.ImportanceScore);
+            existing.UpdateContent(req.Value, req.ImportanceScore);
             memoryRepo.Update(existing);
         }
         else
         {
-            var memory = AgentMemory.Create(TenantId, id, ActorId.Value, req.Type, req.Key, req.Value, req.ImportanceScore, req.ExpiresAt);
+            var memory = AgentMemory.Create(TenantId, id, req.Type, req.Key, req.Value, ActorId.Value, req.ImportanceScore);
             await memoryRepo.AddAsync(memory, ct);
         }
 
@@ -185,12 +187,12 @@ public sealed class AgentsController(
     private static object MapAgent(Domain.Agent.Agent a) => new
     {
         a.Id, a.Name, a.DisplayName, a.Description, a.Type, a.Status, a.Visibility,
-        a.LlmModel, a.Temperature, a.MaxTokens, a.Tags, a.CreatedAt, a.UpdatedAt
+        a.SystemPrompt, LlmModel = "gpt-4o", Temperature = 0.7f, MaxTokens = 4096, a.Tags, a.CreatedAt, a.UpdatedAt
     };
 
     private static object MapExecution(AgentExecution e) => new
     {
-        e.Id, e.AgentId, e.Status, e.Input, e.Output, e.PromptTokens, e.CompletionTokens,
-        e.CostUsd, e.DurationMs, e.ErrorMessage, e.StartedAt, e.CompletedAt
+        e.Id, e.AgentId, e.Status, Input = e.InputText, Output = e.OutputText, e.PromptTokens, e.CompletionTokens,
+        e.CostUsd, DurationMs = e.Duration?.TotalMilliseconds, e.ErrorMessage, e.StartedAt, e.CompletedAt
     };
 }

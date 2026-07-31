@@ -6,20 +6,26 @@ using Microsoft.AspNetCore.Mvc;
 namespace EAIOS.Api.Controllers.V1;
 
 /// <summary>
-/// Espaces de travail (Workspaces).
+/// Espaces de travail (Workspaces) : CRUD + gestion des membres.
+/// Route : /api/v1/workspaces
 /// </summary>
 [Route("api/v1/workspaces")]
 public sealed class WorkspacesController(
     IWorkspaceRepository  workspaceRepo,
     IMembershipRepository membershipRepo) : V1ApiController
 {
+    // ── GET /api/v1/workspaces ────────────────────────────────────────────────
     [HttpGet]
-    public async Task<IActionResult> List([FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
+    public async Task<IActionResult> List(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default)
     {
-        var result = await workspaceRepo.GetPagedAsync(page, pageSize, ct);
+        var result = await workspaceRepo.GetPagedAsync(page, pageSize, null, null, ct);
         return OkList(result.Items.Select(MapWs).ToList(), result.TotalCount, page, pageSize);
     }
 
+    // ── GET /api/v1/workspaces/{id} ───────────────────────────────────────────
     [HttpGet("{id:guid}", Name = "GetWorkspace")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
@@ -27,32 +33,46 @@ public sealed class WorkspacesController(
         return ws == null ? NotFound() : Ok200(MapWs(ws));
     }
 
+    // ── POST /api/v1/workspaces ───────────────────────────────────────────────
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateWorkspaceRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var ws = Workspace.Create(TenantId, req.Name, req.Description, req.Visibility, ActorId.Value);
+        if (string.IsNullOrWhiteSpace(req.Name))
+            return BadRequest("Name est requis.");
+
+        var ws = Workspace.Create(TenantId, req.Name, ActorId.Value, req.Type, req.Description);
+        if (req.Color != null || req.IconCode != null)
+        {
+            ws.Update(null, null, req.Color, req.IconCode);
+        }
         await workspaceRepo.AddAsync(ws, ct);
         await workspaceRepo.SaveAsync(ct);
+
         return Created201("GetWorkspace", new { id = ws.Id }, MapWs(ws));
     }
 
+    // ── PUT /api/v1/workspaces/{id} ───────────────────────────────────────────
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateWorkspaceRequest req, CancellationToken ct)
     {
         var ws = await workspaceRepo.GetByIdAsync(id, ct);
-        if (ws == null) return NotFound();
-        ws.Update(req.Name, req.Description, req.AvatarUrl, req.Visibility);
+        if (ws == null) return NotFound("Workspace introuvable.");
+
+        ws.Update(req.Name, req.Description, req.Color, req.IconCode);
         workspaceRepo.Update(ws);
         await workspaceRepo.SaveAsync(ct);
+
         return Ok200(MapWs(ws));
     }
 
+    // ── DELETE /api/v1/workspaces/{id} ────────────────────────────────────────
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var ws = await workspaceRepo.GetByIdAsync(id, ct);
         if (ws == null) return NotFound();
+
         workspaceRepo.SoftDelete(ws);
         await workspaceRepo.SaveAsync(ct);
         return NoContent204();
@@ -60,112 +80,79 @@ public sealed class WorkspacesController(
 
     // ── Membres ───────────────────────────────────────────────────────────────
 
+    // ── GET /api/v1/workspaces/{id}/members ───────────────────────────────────
     [HttpGet("{id:guid}/members")]
     public async Task<IActionResult> GetMembers(Guid id, CancellationToken ct)
     {
+        var ws = await workspaceRepo.GetByIdAsync(id, ct);
+        if (ws == null) return NotFound();
+
         var members = await membershipRepo.GetByWorkspaceAsync(id, ct);
-        return Ok200(members.Select(m => new { m.Id, m.UserId, m.Role, m.Status, m.JoinedAt }).ToList());
+        return Ok200(members.Select(m => new
+        {
+            m.Id,
+            m.UserId,
+            Role = m.Type,
+            m.Status,
+            m.JoinedAt,
+            m.CreatedAt
+        }).ToList());
     }
 
+    // ── POST /api/v1/workspaces/{id}/members ──────────────────────────────────
     [HttpPost("{id:guid}/members")]
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddMemberRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
+
+        var ws = await workspaceRepo.GetByIdAsync(id, ct);
+        if (ws == null) return NotFound();
+
         var existing = await membershipRepo.FindAsync(req.UserId, id, null, ct);
         if (existing != null)
-            return Conflict("Cet utilisateur est déjà membre de cet espace.");
+            return Conflict("Cet utilisateur est déjà membre de cet espace de travail.");
 
-        var membership = Membership.Create(TenantId, req.UserId, workspaceId: id, role: req.Role, invitedBy: ActorId.Value);
+        var membership = Membership.Create(TenantId, req.UserId,
+            MembershipType.Member, workspaceId: id);
+
         await membershipRepo.AddAsync(membership, ct);
         await membershipRepo.SaveAsync(ct);
-        return Ok200(new { membership.Id, membership.UserId, membership.Role, membership.Status, membership.JoinedAt });
+
+        return Ok200(new
+        {
+            membership.Id,
+            membership.UserId,
+            Role = membership.Type,
+            membership.Status,
+            membership.JoinedAt
+        });
     }
 
+    // ── DELETE /api/v1/workspaces/{id}/members/{userId} ───────────────────────
     [HttpDelete("{id:guid}/members/{userId:guid}")]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken ct)
     {
         var membership = await membershipRepo.FindAsync(userId, id, null, ct);
         if (membership == null) return NotFound();
+
         membershipRepo.SoftDelete(membership);
         await membershipRepo.SaveAsync(ct);
         return NoContent204();
     }
 
-    private static object MapWs(Workspace w) => new
-    {
-        w.Id, w.Name, w.Slug, w.Description, w.AvatarUrl, w.Status, w.Visibility, w.CreatedAt
-    };
-}
-
-/// <summary>
-/// Départements.
-/// </summary>
-[Route("api/v1/departments")]
-public sealed class DepartmentsController(
-    IDepartmentRepository departmentRepo,
-    IMembershipRepository membershipRepo) : V1ApiController
-{
-    [HttpGet]
-    public async Task<IActionResult> List(CancellationToken ct)
-    {
-        var all = await departmentRepo.GetAllAsync(ct);
-        return Ok200(all.Select(MapDept).ToList());
-    }
-
-    [HttpGet("{id:guid}", Name = "GetDepartment")]
-    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-    {
-        var dept = await departmentRepo.GetByIdAsync(id, ct);
-        return dept == null ? NotFound() : Ok200(MapDept(dept));
-    }
-
-    [HttpGet("{id:guid}/children")]
-    public async Task<IActionResult> GetChildren(Guid id, CancellationToken ct)
-    {
-        var children = await departmentRepo.GetChildrenAsync(id, ct);
-        return Ok200(children.Select(MapDept).ToList());
-    }
-
-    [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CreateDepartmentRequest req, CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var dept = Department.Create(TenantId, req.Name, req.Code, req.ParentId, ActorId.Value);
-        await departmentRepo.AddAsync(dept, ct);
-        await departmentRepo.SaveAsync(ct);
-        return Created201("GetDepartment", new { id = dept.Id }, MapDept(dept));
-    }
-
-    [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDepartmentRequest req, CancellationToken ct)
-    {
-        var dept = await departmentRepo.GetByIdAsync(id, ct);
-        if (dept == null) return NotFound();
-        dept.Update(req.Name, req.Code, req.Description, req.ManagerId);
-        departmentRepo.Update(dept);
-        await departmentRepo.SaveAsync(ct);
-        return Ok200(MapDept(dept));
-    }
-
-    [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-    {
-        var dept = await departmentRepo.GetByIdAsync(id, ct);
-        if (dept == null) return NotFound();
-        departmentRepo.SoftDelete(dept);
-        await departmentRepo.SaveAsync(ct);
-        return NoContent204();
-    }
-
-    [HttpGet("{id:guid}/members")]
-    public async Task<IActionResult> GetMembers(Guid id, CancellationToken ct)
-    {
-        var members = await membershipRepo.GetByDepartmentAsync(id, ct);
-        return Ok200(members.Select(m => new { m.Id, m.UserId, m.Role, m.Status, m.JoinedAt }).ToList());
-    }
-
-    private static object MapDept(Department d) => new
-    {
-        d.Id, d.Name, d.Code, d.ParentId, d.ManagerId, d.Status, d.Depth, d.CreatedAt
-    };
+    // ── Mapper ────────────────────────────────────────────────────────────────
+    private static WorkspaceDto MapWs(Workspace w) => new WorkspaceDto(
+        w.Id,
+        w.Name,
+        w.Description,
+        w.Type,
+        w.Status,
+        w.Color,
+        w.IconCode,
+        w.OwnerId,
+        w.MemberCount,
+        w.StorageUsedBytes,
+        w.Tags,
+        w.CreatedAt
+    );
 }

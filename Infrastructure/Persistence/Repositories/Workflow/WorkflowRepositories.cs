@@ -91,7 +91,7 @@ public sealed class WorkflowTaskRepository(EaiosDbContext db) : RepositoryBase<W
     }
 
     public async Task<IReadOnlyList<WorkflowTask>> GetOverdueAsync(CancellationToken ct = default) =>
-        await Set.Where(t => t.Status == WorkflowTaskStatus.Pending && t.DueAt < DateTime.UtcNow)
+        await Set.Where(t => t.Status == WorkflowTaskStatus.Open && t.DueAt < DateTime.UtcNow)
                  .OrderBy(t => t.DueAt)
                  .ToListAsync(ct);
 }

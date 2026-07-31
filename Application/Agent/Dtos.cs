@@ -127,3 +127,10 @@ public sealed record AgentMemoryDto(
     int AccessCount,
     DateTime? ExpiresAt,
     DateTime CreatedAt);
+
+public sealed record UpsertMemoryRequest(
+    EAIOS.Api.Domain.Agent.AgentMemoryType Type,
+    string Key,
+    string Value,
+    float ImportanceScore = 1.0f,
+    DateTime? ExpiresAt = null);

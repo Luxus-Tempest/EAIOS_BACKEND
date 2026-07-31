@@ -3,6 +3,7 @@ using EAIOS.Api.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Cryptography;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,7 +44,6 @@ builder.Services.AddControllers()
 
 // ── OpenAPI ───────────────────────────────────────────────────────────────
 builder.Services.AddOpenApi();
-builder.Services.AddEndpointsApiExplorer();
 
 // ── Exception Handler ─────────────────────────────────────────────────────
 builder.Services.AddExceptionHandler<EAIOS.Api.Middleware.GlobalExceptionHandler>();
@@ -68,7 +68,7 @@ app.UseExceptionHandler();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-    app.UseStaticFiles(); // pour Swagger UI si ajouté
+    app.MapScalarApiReference();
 }
 
 app.UseCors();

@@ -42,7 +42,7 @@ public sealed class KnowledgeController(
     public async Task<IActionResult> CreateItem([FromBody] CreateKnowledgeItemRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var item = KnowledgeItem.Create(TenantId, req.Title, req.Content, req.Type, req.Source, req.Language ?? "fr", req.PackId, ActorId.Value);
+        var item = KnowledgeItem.Create(TenantId, req.Title, req.Type, KnowledgeItemSource.Manual, ActorId.Value, req.Content, req.SourceDocumentId);
 
         await itemRepo.AddAsync(item, ct);
         await itemRepo.SaveAsync(ct);
@@ -60,7 +60,7 @@ public sealed class KnowledgeController(
     {
         var item = await itemRepo.GetByIdAsync(id, ct);
         if (item == null) return NotFound();
-        item.Update(req.Title, req.Content, req.Tags, req.Language);
+        item.Update(req.Title, req.Content, req.Summary, req.Tags, req.Language);
         itemRepo.Update(item);
         await itemRepo.SaveAsync(ct);
         return Ok200(MapItem(item));
@@ -84,7 +84,7 @@ public sealed class KnowledgeController(
         if (!ActorId.HasValue) return Unauthorized();
         var item = await itemRepo.GetByIdAsync(id, ct);
         if (item == null) return NotFound();
-        item.Validate(ActorId.Value, req.Note);
+        item.Validate(true, ActorId.Value);
         itemRepo.Update(item);
         await itemRepo.SaveAsync(ct);
         return Ok200(MapItem(item));
@@ -105,7 +105,7 @@ public sealed class KnowledgeController(
     [HttpGet("packs")]
     public async Task<IActionResult> ListPacks([FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
     {
-        var result = await packRepo.GetPagedAsync(page, pageSize, ct);
+        var result = await packRepo.GetPagedAsync(page, pageSize, ct: ct);
         return OkList(result.Items.Select(MapPack).ToList(), result.TotalCount, page, pageSize);
     }
 
@@ -120,7 +120,7 @@ public sealed class KnowledgeController(
     public async Task<IActionResult> CreatePack([FromBody] CreateKnowledgePackRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var pack = KnowledgePack.Create(TenantId, req.Name, req.Description, req.IsPublic, ActorId.Value);
+        var pack = KnowledgePack.Create(TenantId, req.Name, ActorId.Value, req.Description, req.IsPublic);
         await packRepo.AddAsync(pack, ct);
         await packRepo.SaveAsync(ct);
         return Created201("GetKnowledgePack", new { id = pack.Id }, MapPack(pack));
@@ -179,7 +179,7 @@ public sealed class KnowledgeController(
         {
             var end  = Math.Min(i + chunkSize, content.Length);
             var text = content[i..end];
-            chunks.Add(KnowledgeChunk.Create(orgId, itemId, idx++, text));
+            chunks.Add(KnowledgeChunk.Create(orgId, itemId, idx++, text, text.Length / 4 + 1));
             i += chunkSize - overlap;
         }
         return chunks;
@@ -189,7 +189,7 @@ public sealed class KnowledgeController(
     private static object MapItem(KnowledgeItem i) => new
     {
         i.Id, i.Title, i.Content, i.Type, i.Source, i.Status, i.Language, i.PackId,
-        i.Tags, i.ValidatedBy, i.ValidatedAt, i.CreatedAt, i.UpdatedAt
+        i.Tags, ValidatedBy = i.VerifiedBy, ValidatedAt = i.VerifiedAt, i.CreatedAt, i.UpdatedAt
     };
 
     private static object MapPack(KnowledgePack p) => new

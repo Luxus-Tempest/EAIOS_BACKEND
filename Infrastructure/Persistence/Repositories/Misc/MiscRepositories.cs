@@ -38,6 +38,7 @@ public interface INotificationRepository
     Task MarkAllReadAsync(Guid recipientId, CancellationToken ct = default);
     Task AddAsync(Notification notification, CancellationToken ct = default);
     void Update(Notification notification);
+    void SoftDelete(Notification notification);
     Task<int> SaveAsync(CancellationToken ct = default);
 }
 
@@ -74,7 +75,7 @@ public interface IAnalyticsEventRepository
 
 public sealed class AnalyticsEventRepository(EaiosDbContext db) : RepositoryBase<AnalyticsEvent>(db), IAnalyticsEventRepository
 {
-    public async Task AddRangeAsync(IEnumerable<AnalyticsEvent> events, CancellationToken ct = default) =>
+    public override async Task AddRangeAsync(IEnumerable<AnalyticsEvent> events, CancellationToken ct = default) =>
         await db.AnalyticsEvents.AddRangeAsync(events, ct);
 }
 
@@ -105,6 +106,7 @@ public interface ISyncJobRepository
     Task<IReadOnlyList<SyncJob>> GetDueAsync(CancellationToken ct = default);
     Task AddAsync(SyncJob job, CancellationToken ct = default);
     void Update(SyncJob job);
+    void SoftDelete(SyncJob job);
     Task<int> SaveAsync(CancellationToken ct = default);
 }
 

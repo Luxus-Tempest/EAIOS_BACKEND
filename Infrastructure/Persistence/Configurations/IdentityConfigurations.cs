@@ -43,11 +43,9 @@ public sealed class SessionConfiguration : IEntityTypeConfiguration<Session>
         b.HasIndex(s => new { s.UserId, s.Status });
         b.Property(s => s.RefreshTokenHash).HasMaxLength(500).IsRequired();
         b.Property(s => s.Status).HasConversion<string>().HasMaxLength(30);
-        b.Property(s => s.DeviceType).HasMaxLength(50);
-        b.Property(s => s.DeviceOs).HasMaxLength(100);
-        b.Property(s => s.DeviceName).HasMaxLength(200);
+        b.Property(s => s.DeviceFingerprint).HasMaxLength(200);
         b.Property(s => s.IpAddress).HasMaxLength(45);
-        b.Property(s => s.RevokedReason).HasMaxLength(200);
+        b.Property(s => s.RevocationReason).HasMaxLength(200);
     }
 }
 

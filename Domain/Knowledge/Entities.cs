@@ -200,13 +200,14 @@ public sealed class KnowledgePack : TenantEntity
     public DateTime? LastExportedAt { get; private set; }
     public Guid OwnerId { get; private set; }
 
-    public static KnowledgePack Create(Guid organizationId, string name, Guid ownerId, string? description = null)
+    public static KnowledgePack Create(Guid organizationId, string name, Guid ownerId, string? description = null, bool isPublic = false)
     {
         var pack = new KnowledgePack
         {
             Id = Guid.CreateVersion7(),
             Name = name.Trim(),
             Description = description,
+            IsPublic = isPublic,
             Status = KnowledgePackStatus.Draft,
             OwnerId = ownerId
         };

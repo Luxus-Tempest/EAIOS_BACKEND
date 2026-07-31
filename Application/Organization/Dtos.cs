@@ -108,3 +108,14 @@ public sealed record MemberDto(
 public sealed record AddMemberRequest(
     Guid UserId,
     MembershipType Type = MembershipType.Member);
+
+/// <summary>Envoi d'invitation par email.</summary>
+public sealed record SendInvitationRequest(
+    string  Email,
+    string  Role    = "member",
+    string? Message = null);
+
+/// <summary>Mise à jour du statut d'un utilisateur (suspension/réactivation).</summary>
+public sealed record UpdateUserStatusRequest(
+    EAIOS.Api.Domain.Identity.UserStatus Status,
+    string?    Reason = null);

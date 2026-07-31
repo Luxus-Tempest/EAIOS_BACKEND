@@ -47,27 +47,34 @@ public sealed class ConnectorInstance : TenantEntity
     public DateTime? LastSyncAt { get; private set; }
     public SyncHealth Health { get; private set; }
     public string? LastHealthCheckMessage { get; private set; }
-    public Guid CreatedBy { get; private set; }
 
     public IReadOnlyList<SyncJob> SyncJobs { get; private set; } = [];
 
     public static ConnectorInstance Create(Guid organizationId, Guid definitionId, string name,
-        Guid createdBy, string? configJson = null, string? credentialsEncrypted = null)
+        Guid createdBy, string? description = null, Guid? workspaceId = null,
+        string? configJson = null, string? credentialsEncrypted = null)
     {
         var ci = new ConnectorInstance
         {
             Id = Guid.CreateVersion7(),
             DefinitionId = definitionId,
             Name = name.Trim(),
+            Description = description,
+            WorkspaceId = workspaceId,
             Status = ConnectorInstanceStatus.Configuring,
             Health = SyncHealth.Unknown,
             ConfigurationJson = configJson ?? "{}",
-            CredentialsEncrypted = credentialsEncrypted,
-            CreatedBy = createdBy
+            CredentialsEncrypted = credentialsEncrypted
         };
         ci.SetOrganizationId(organizationId);
         ci.SetCreated(createdBy);
         return ci;
+    }
+
+    public void UpdateMetadata(string name, string? description)
+    {
+        if (!string.IsNullOrWhiteSpace(name)) Name = name.Trim();
+        if (description is not null) Description = description;
     }
 
     public void Activate() => Status = ConnectorInstanceStatus.Active;

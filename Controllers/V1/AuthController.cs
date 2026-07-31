@@ -11,7 +11,6 @@ namespace EAIOS.Api.Controllers.V1;
 /// Authentication : login, refresh, logout, register, profil, MFA, sessions, API keys.
 /// </summary>
 [Route("api/v1/auth")]
-[AllowAnonymous]
 public sealed class AuthController(
     IUserRepository        userRepo,
     ISessionRepository     sessionRepo,
@@ -24,7 +23,7 @@ public sealed class AuthController(
     IApiKeyService         apiKeyService) : V1ApiController
 {
     // ── POST /api/v1/auth/login ───────────────────────────────────────────────
-    [HttpPost("login")]
+    [HttpPost("login"), AllowAnonymous]
     public async Task<IActionResult> Login([FromBody] LoginRequest req, CancellationToken ct)
     {
         var user = await userRepo.FindByEmailAsync(req.Email.Trim().ToUpperInvariant(), ct);
@@ -75,7 +74,7 @@ public sealed class AuthController(
     }
 
     // ── POST /api/v1/auth/refresh ─────────────────────────────────────────────
-    [HttpPost("refresh")]
+    [HttpPost("refresh"), AllowAnonymous]
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequest req, CancellationToken ct)
     {
         var hash    = tokenService.HashRefreshToken(req.RefreshToken);
@@ -89,7 +88,7 @@ public sealed class AuthController(
             return Unauthorized(new { code = "USER_NOT_FOUND_OR_INACTIVE" });
 
         var newPair = tokenService.Issue(user.Id, user.OrganizationId, session.Id, [], []);
-        session.Rotate(newPair.RefreshTokenHash);
+        session.RotateRefreshToken(newPair.RefreshTokenHash);
         await sessionRepo.SaveAsync(ct);
 
         return Ok200(new RefreshResponse(
@@ -100,7 +99,6 @@ public sealed class AuthController(
 
     // ── POST /api/v1/auth/logout ──────────────────────────────────────────────
     [HttpPost("logout")]
-    [Authorize]
     public async Task<IActionResult> Logout([FromBody] LogoutRequest req, CancellationToken ct)
     {
         var hash    = tokenService.HashRefreshToken(req.RefreshToken);
@@ -114,7 +112,7 @@ public sealed class AuthController(
     }
 
     // ── POST /api/v1/auth/register ────────────────────────────────────────────
-    [HttpPost("register")]
+    [HttpPost("register"), AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest req, CancellationToken ct)
     {
         var invitation = await invitationRepo.FindByTokenAsync(req.InvitationToken, ct);
@@ -128,7 +126,7 @@ public sealed class AuthController(
         if (await userRepo.EmailExistsAsync(normalizedEmail, ct))
             return Conflict("Un compte avec cet email existe déjà.");
 
-        var user = User.Create(invitation.OrganizationId, req.Email.Trim(), req.FirstName, req.LastName);
+        var user = Domain.Identity.User.Create(invitation.OrganizationId, req.Email.Trim(), req.FirstName, req.LastName);
         user.SetPasswordHash(passwordService.HashPassword(req.Password));
         user.VerifyEmail(user.EmailVerificationToken ?? "");
 
@@ -181,7 +179,7 @@ public sealed class AuthController(
         // Persister la credential MFA
         var cred = MfaCredential.Create(user.OrganizationId, user.Id, MfaMethod.Totp, req.Secret);
         var backupHashes = req.BackupCodes.Select(c => totpService.HashBackupCode(c)).ToArray();
-        cred.SetBackupCodes(backupHashes);
+        cred.Activate(System.Text.Json.JsonSerializer.Serialize(backupHashes));
 
         await mfaRepo.AddAsync(cred, ct);
         user.EnableMfa(MfaMethod.Totp);
@@ -203,7 +201,7 @@ public sealed class AuthController(
         if (!passwordService.VerifyPassword(req.Password, user.PasswordHash ?? ""))
             return Unauthorized(new { code = "INVALID_PASSWORD" });
 
-        user.DisableMfa();
+        user.DisableMfa(MfaMethod.Totp);
         var creds = await mfaRepo.GetActiveByUserAsync(user.Id, ct);
         foreach (var c in creds) mfaRepo.SoftDelete(c);
 
@@ -218,7 +216,7 @@ public sealed class AuthController(
     {
         if (!ActorId.HasValue) return Unauthorized();
         var sessions = await sessionRepo.GetActiveByUserAsync(ActorId.Value, ct);
-        var dtos = sessions.Select(s => new SessionDto(s.Id, s.DeviceType, s.DeviceOs, s.DeviceName, s.IpAddress, s.Status, s.LastActivityAt, s.CreatedAt, s.ExpiresAt)).ToList();
+        var dtos = sessions.Select(s => new SessionDto(s.Id, s.IpAddress, s.UserAgent, s.LastActivityAt, s.CreatedAt, s.ExpiresAt, false)).ToList();
         return Ok200(dtos);
     }
 
@@ -241,7 +239,7 @@ public sealed class AuthController(
     {
         if (!ActorId.HasValue) return Unauthorized();
         var keys = await apiKeyRepo.GetByUserAsync(ActorId.Value, ct);
-        var dtos = keys.Select(k => new ApiKeyDto(k.Id, k.Name, k.KeyPrefix, k.IsActive, k.ExpiresAt, k.LastUsedAt, k.CreatedAt)).ToList();
+        var dtos = keys.Select(k => new ApiKeyDto(k.Id, k.Name, k.KeyPrefix, k.Scopes, k.IsActive, k.ExpiresAt, k.LastUsedAt, k.CreatedAt)).ToList();
         return Ok200(dtos);
     }
 
@@ -251,13 +249,13 @@ public sealed class AuthController(
     {
         if (!ActorId.HasValue) return Unauthorized();
         var (fullKey, prefix, hash) = apiKeyService.Generate();
-        var apiKey = ApiKey.Create(TenantId, ActorId.Value, req.Name, prefix, hash, req.ExpiresAt);
+        var apiKey = ApiKey.Create(TenantId, ActorId.Value, req.Name, prefix, hash, req.Scopes, req.ExpiresAt);
 
         await apiKeyRepo.AddAsync(apiKey, ct);
         await apiKeyRepo.SaveAsync(ct);
 
         // Retourner la clé en clair UNE SEULE FOIS
-        return Ok200(new ApiKeyCreatedDto(apiKey.Id, apiKey.Name, fullKey, apiKey.KeyPrefix, apiKey.CreatedAt));
+        return Ok200(new ApiKeyCreatedDto(apiKey.Id, apiKey.Name, apiKey.KeyPrefix, fullKey, apiKey.Scopes, apiKey.ExpiresAt, apiKey.CreatedAt));
     }
 
     [HttpDelete("api-keys/{id:guid}")]

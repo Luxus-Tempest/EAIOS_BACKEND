@@ -10,8 +10,13 @@ namespace EAIOS.Api.Infrastructure.Persistence.Repositories.Organization;
 public interface IWorkspaceRepository
 {
     Task<Workspace?> GetByIdAsync(Guid id, CancellationToken ct = default);
-    Task<PagedResult<Workspace>> GetPagedAsync(int page, int pageSize, CancellationToken ct = default);
     Task<IReadOnlyList<Workspace>> GetByMemberAsync(Guid userId, CancellationToken ct = default);
+    Task<PagedResult<Workspace>> GetPagedAsync(
+        int page,
+        int pageSize,
+        System.Linq.Expressions.Expression<Func<Workspace, bool>>? filter = null,
+        Func<IQueryable<Workspace>, IOrderedQueryable<Workspace>>? orderBy = null,
+        CancellationToken ct = default);
     Task AddAsync(Workspace workspace, CancellationToken ct = default);
     void Update(Workspace workspace);
     void SoftDelete(Workspace workspace);

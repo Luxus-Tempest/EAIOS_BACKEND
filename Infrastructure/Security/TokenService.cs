@@ -129,7 +129,7 @@ public sealed class TokenService : ITokenService
     {
         var bytes = new byte[48];
         RandomNumberGenerator.Fill(bytes);
-        return Convert.ToBase64Url(bytes);
+        return Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
     }
 
     public string HashRefreshToken(string rawToken)

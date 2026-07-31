@@ -46,8 +46,21 @@ public sealed class User : TenantEntity
     public DateTime? LockedUntil { get; private set; }
     public DateTime? LastLoginAt { get; private set; }
     public string? LastLoginIp { get; private set; }
+    public bool HasMfaEnabled { get; private set; }
     public string? PasswordResetToken { get; private set; }
     public DateTime? PasswordResetTokenExpiry { get; private set; }
+
+    // ── Navigation Collections ──────────────────────────────────────────────────
+    private readonly List<Session> _sessions = [];
+    public IReadOnlyCollection<Session> Sessions => _sessions.AsReadOnly();
+
+    private readonly List<ApiKey> _apiKeys = [];
+    public IReadOnlyCollection<ApiKey> ApiKeys => _apiKeys.AsReadOnly();
+
+    private readonly List<MfaCredential> _mfaCredentials = [];
+    public IReadOnlyCollection<MfaCredential> MfaCredentials => _mfaCredentials.AsReadOnly();
+
+    private User() { }
 
     // ── Preferences ────────────────────────────────────────────────────────────
     public string? NotificationPreferences { get; private set; } // JSONB
@@ -299,6 +312,7 @@ public sealed class Invitation : TenantEntity
     public string NormalizedEmail { get; private set; } = string.Empty;
     public string? FirstName { get; private set; }
     public string? LastName { get; private set; }
+    public string? Role { get; private set; }
     public Guid? RoleId { get; private set; }
     public Guid? WorkspaceId { get; private set; }
     public Guid? DepartmentId { get; private set; }
@@ -313,13 +327,14 @@ public sealed class Invitation : TenantEntity
     public DateTime? LastSentAt { get; private set; }
 
     public static Invitation Create(Guid organizationId, string email, Guid invitedBy,
-        Guid? roleId = null, Guid? workspaceId = null, string? message = null)
+        string? role = null, Guid? roleId = null, Guid? workspaceId = null, string? message = null)
     {
         var inv = new Invitation
         {
             Id = Guid.CreateVersion7(),
             Email = email.Trim().ToLowerInvariant(),
             NormalizedEmail = email.Trim().ToUpperInvariant(),
+            Role = role ?? "member",
             RoleId = roleId,
             WorkspaceId = workspaceId,
             Status = InvitationStatus.Pending,
@@ -337,5 +352,6 @@ public sealed class Invitation : TenantEntity
     public bool IsValid => Status == InvitationStatus.Pending && ExpiresAt > DateTime.UtcNow;
     public void Accept(Guid userId) { Status = InvitationStatus.Accepted; AcceptedAt = DateTime.UtcNow; AcceptedByUserId = userId; }
     public void Revoke() => Status = InvitationStatus.Revoked;
+    public void Expire() => Status = InvitationStatus.Expired;
     public void Resend() { ResendCount++; LastSentAt = DateTime.UtcNow; ExpiresAt = DateTime.UtcNow.AddDays(7); }
 }

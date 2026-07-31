@@ -5,7 +5,7 @@ namespace EAIOS.Api.Domain.Shared.Primitives;
 /// </summary>
 public abstract class Entity<TId>
 {
-    public TId Id { get; protected set; } = default!;
+    public TId Id { get; set; } = default!;
     public DateTime CreatedAt { get; protected set; }
     public DateTime UpdatedAt { get; protected set; }
 }

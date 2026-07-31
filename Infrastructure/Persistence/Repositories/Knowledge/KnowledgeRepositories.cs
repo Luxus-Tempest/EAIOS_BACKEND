@@ -59,7 +59,7 @@ public sealed class KnowledgeChunkRepository(EaiosDbContext db) : RepositoryBase
     public async Task<IReadOnlyList<KnowledgeChunk>> GetPendingEmbeddingAsync(int batchSize, CancellationToken ct = default) =>
         await Set.Where(c => !c.IsEmbedded).Take(batchSize).ToListAsync(ct);
 
-    public async Task AddRangeAsync(IEnumerable<KnowledgeChunk> chunks, CancellationToken ct = default) =>
+    public override async Task AddRangeAsync(IEnumerable<KnowledgeChunk> chunks, CancellationToken ct = default) =>
         await db.KnowledgeChunks.AddRangeAsync(chunks, ct);
 }
 
@@ -68,7 +68,12 @@ public sealed class KnowledgeChunkRepository(EaiosDbContext db) : RepositoryBase
 public interface IKnowledgePackRepository
 {
     Task<KnowledgePack?> GetByIdAsync(Guid id, CancellationToken ct = default);
-    Task<PagedResult<KnowledgePack>> GetPagedAsync(int page, int pageSize, CancellationToken ct = default);
+    Task<PagedResult<KnowledgePack>> GetPagedAsync(
+        int page,
+        int pageSize,
+        System.Linq.Expressions.Expression<Func<KnowledgePack, bool>>? filter = null,
+        Func<IQueryable<KnowledgePack>, IOrderedQueryable<KnowledgePack>>? orderBy = null,
+        CancellationToken ct = default);
     Task<IReadOnlyList<KnowledgePack>> GetPublicAsync(CancellationToken ct = default);
     Task AddAsync(KnowledgePack pack, CancellationToken ct = default);
     void Update(KnowledgePack pack);

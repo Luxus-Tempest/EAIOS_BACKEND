@@ -45,8 +45,8 @@ public static class ServiceExtensions
         }
         else
         {
-            services.AddSingleton<TenantSessionInterceptor>();
-            services.AddSingleton<AuditSaveChangesInterceptor>();
+            services.AddScoped<TenantSessionInterceptor>();
+            services.AddScoped<AuditSaveChangesInterceptor>();
 
             services.AddDbContext<EaiosDbContext>((sp, opt) =>
             {

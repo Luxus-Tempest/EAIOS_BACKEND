@@ -13,7 +13,12 @@ public interface IRoleRepository
     Task<Role?> FindByNameAsync(string name, CancellationToken ct = default);
     Task<IReadOnlyList<Role>> GetAllAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Role>> GetByUserAsync(Guid userId, CancellationToken ct = default);
-    Task<PagedResult<Role>> GetPagedAsync(int page, int pageSize, CancellationToken ct = default);
+    Task<PagedResult<Role>> GetPagedAsync(
+        int page,
+        int pageSize,
+        System.Linq.Expressions.Expression<Func<Role, bool>>? filter = null,
+        Func<IQueryable<Role>, IOrderedQueryable<Role>>? orderBy = null,
+        CancellationToken ct = default);
     Task AddAsync(Role role, CancellationToken ct = default);
     void Update(Role role);
     void SoftDelete(Role role);
@@ -64,7 +69,7 @@ public sealed class PermissionRepository(EaiosDbContext db) : RepositoryBase<Per
     public async Task<IReadOnlyList<Permission>> GetByModuleAsync(string module, CancellationToken ct = default) =>
         await Set.Where(p => p.Module == module).OrderBy(p => p.Code).ToListAsync(ct);
 
-    public async Task AddRangeAsync(IEnumerable<Permission> permissions, CancellationToken ct = default) =>
+    public override async Task AddRangeAsync(IEnumerable<Permission> permissions, CancellationToken ct = default) =>
         await Set.AddRangeAsync(permissions, ct);
 }
 
@@ -83,7 +88,7 @@ public interface IUserRoleRepository
 public sealed class UserRoleRepository(EaiosDbContext db) : RepositoryBase<UserRole>(db), IUserRoleRepository
 {
     public async Task<IReadOnlyList<UserRole>> GetByUserAsync(Guid userId, CancellationToken ct = default) =>
-        await Set.Where(ur => ur.UserId == userId).OrderByDescending(ur => ur.AssignedAt).ToListAsync(ct);
+        await Set.Where(ur => ur.UserId == userId).OrderByDescending(ur => ur.CreatedAt).ToListAsync(ct);
 
     public async Task<bool> HasRoleAsync(Guid userId, Guid roleId, Guid? workspaceId, CancellationToken ct = default) =>
         await Set.AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId && ur.WorkspaceId == workspaceId, ct);
@@ -94,8 +99,15 @@ public sealed class UserRoleRepository(EaiosDbContext db) : RepositoryBase<UserR
 public interface IPolicyRepository
 {
     Task<Policy?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<Policy?> FindByNameAsync(string name, CancellationToken ct = default);
+    Task<IReadOnlyList<Policy>> GetAllAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Policy>> GetActiveAsync(CancellationToken ct = default);
-    Task<PagedResult<Policy>> GetPagedAsync(int page, int pageSize, CancellationToken ct = default);
+    Task<PagedResult<Policy>> GetPagedAsync(
+        int page,
+        int pageSize,
+        System.Linq.Expressions.Expression<Func<Policy, bool>>? filter = null,
+        Func<IQueryable<Policy>, IOrderedQueryable<Policy>>? orderBy = null,
+        CancellationToken ct = default);
     Task AddAsync(Policy policy, CancellationToken ct = default);
     void Update(Policy policy);
     void SoftDelete(Policy policy);
@@ -104,6 +116,12 @@ public interface IPolicyRepository
 
 public sealed class PolicyRepository(EaiosDbContext db) : RepositoryBase<Policy>(db), IPolicyRepository
 {
+    public async Task<Policy?> FindByNameAsync(string name, CancellationToken ct = default) =>
+        await Set.FirstOrDefaultAsync(p => p.Name == name, ct);
+
+    public async Task<IReadOnlyList<Policy>> GetAllAsync(CancellationToken ct = default) =>
+        await Set.OrderBy(p => p.Name).ToListAsync(ct);
+
     public async Task<IReadOnlyList<Policy>> GetActiveAsync(CancellationToken ct = default) =>
         await Set.Where(p => p.IsActive)
                  .OrderByDescending(p => p.Priority)

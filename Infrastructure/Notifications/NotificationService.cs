@@ -45,15 +45,15 @@ public sealed class InMemoryNotificationService(
         CancellationToken ct = default)
     {
         var notification = Domain.Notification.Notification.Create(
-            organizationId,
-            recipientId,
-            NotificationChannel.InApp,
-            type,
-            title,
-            body,
-            actionUrl,
-            actionLabel,
-            priority);
+            organizationId: organizationId,
+            recipientId: recipientId,
+            channel: NotificationChannel.InApp,
+            type: type,
+            title: title,
+            body: body,
+            priority: priority,
+            actionUrl: actionUrl,
+            actionLabel: actionLabel);
 
         notification.MarkSent();
 
