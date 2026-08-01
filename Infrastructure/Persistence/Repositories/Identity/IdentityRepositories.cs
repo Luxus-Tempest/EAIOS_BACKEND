@@ -24,7 +24,7 @@ public interface IUserRepository
 public sealed class UserRepository(EaiosDbContext db) : RepositoryBase<User>(db), IUserRepository
 {
     public async Task<User?> FindByEmailAsync(string normalizedEmail, CancellationToken ct = default) =>
-        await Set.FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail, ct);
+        await Set.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail && !u.IsDeleted, ct);
 
     public async Task<bool> EmailExistsAsync(string normalizedEmail, CancellationToken ct = default) =>
         await Set.AnyAsync(u => u.NormalizedEmail == normalizedEmail, ct);

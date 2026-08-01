@@ -28,41 +28,26 @@ public sealed record TokenPairDto(
 
 public sealed class TokenService : ITokenService
 {
-    private readonly RsaSecurityKey _privateKey;
-    private readonly RsaSecurityKey _publicKey;
-    private readonly string         _issuer;
-    private readonly string         _audience;
-    private readonly int            _accessLifetimeMinutes;
-    private readonly int            _refreshLifetimeDays;
+    private readonly SymmetricSecurityKey _key;
+    private readonly string               _issuer;
+    private readonly string               _audience;
+    private readonly int                  _accessLifetimeMinutes;
+    private readonly int                  _refreshLifetimeDays;
 
     public TokenService(IConfiguration config)
     {
-        _issuer               = config["Security:Jwt:Issuer"]   ?? "eaios-api";
-        _audience             = config["Security:Jwt:Audience"] ?? "eaios-client";
-        _accessLifetimeMinutes = config.GetValue("Security:Jwt:AccessTokenLifetimeMinutes", 15);
-        _refreshLifetimeDays  = config.GetValue("Security:Jwt:RefreshTokenLifetimeDays", 7);
+        _issuer                = config["Security:Jwt:Issuer"]   ?? "eaios-api";
+        _audience              = config["Security:Jwt:Audience"] ?? "eaios-client";
+        _accessLifetimeMinutes = config.GetValue("Security:AccessTokenLifetimeMinutes", 15);
+        _refreshLifetimeDays   = config.GetValue("Security:RefreshTokenLifetimeDays", 7);
 
-        // Clé privée RSA depuis la configuration (PEM ou génération dev)
-        var privateKeyPem = config["Security:Jwt:RsaPrivateKeyPem"];
-        var rsa = RSA.Create();
-
-        if (!string.IsNullOrWhiteSpace(privateKeyPem))
-        {
-            rsa.ImportFromPem(privateKeyPem.AsSpan());
-        }
-        else
-        {
-            // Mode DEV : clé RSA générée en mémoire
-            rsa = RSA.Create(2048);
-        }
-
-        _privateKey = new RsaSecurityKey(rsa);
-        _publicKey  = new RsaSecurityKey(rsa);
+        var secret = config["Security:TokenSigningKey"] ?? "eaios-dev-signing-key-CHANGE-IN-PRODUCTION-must-be-at-least-64-characters-long!";
+        _key = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(secret)) { KeyId = "eaios-key" };
     }
 
     public TokenPairDto Issue(Guid userId, Guid organizationId, Guid sessionId, string[] roles, string[] permissions)
     {
-        var now      = DateTimeOffset.UtcNow;
+        var now       = DateTimeOffset.UtcNow;
         var expiresAt = now.AddMinutes(_accessLifetimeMinutes);
 
         var claims = new List<Claim>
@@ -72,19 +57,19 @@ public sealed class TokenService : ITokenService
             new(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
             new("org_id",     organizationId.ToString()),
             new("session_id", sessionId.ToString()),
-            new("email",      ""), // will be enriched at controller level if needed
+            new("email",      ""),
         };
 
         claims.AddRange(roles.Select(r => new Claim(ClaimTypes.Role, r)));
         claims.AddRange(permissions.Select(p => new Claim("permission", p)));
 
-        var credentials = new SigningCredentials(_privateKey, SecurityAlgorithms.RsaSha256);
+        var credentials = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
         var token = new JwtSecurityToken(
-            issuer:   _issuer,
-            audience: _audience,
-            claims:   claims,
-            notBefore: now.UtcDateTime,
-            expires:  expiresAt.UtcDateTime,
+            issuer:             _issuer,
+            audience:           _audience,
+            claims:             claims,
+            notBefore:          now.UtcDateTime,
+            expires:            expiresAt.UtcDateTime,
             signingCredentials: credentials);
 
         var handler     = new JwtSecurityTokenHandler();
@@ -111,7 +96,7 @@ public sealed class TokenService : ITokenService
             ValidAudience            = _audience,
             ValidateLifetime         = true,
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey         = _publicKey,
+            IssuerSigningKey         = _key,
             ClockSkew                = TimeSpan.FromSeconds(30)
         };
 

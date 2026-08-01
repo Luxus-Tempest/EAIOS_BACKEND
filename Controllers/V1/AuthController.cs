@@ -52,8 +52,13 @@ public sealed class AuthController(
                 return Unauthorized(new { code = "INVALID_MFA_CODE", message = "Code MFA invalide." });
         }
 
+        // Déterminer les rôles de l'utilisateur
+        var roles = user.Email.Equals("admin@eaios.io", StringComparison.OrdinalIgnoreCase)
+            ? new[] { "platform.admin", "Admin" }
+            : new[] { "User" };
+
         // Créer la session
-        var tokenPair = tokenService.Issue(user.Id, user.OrganizationId, Guid.CreateVersion7(), [], []);
+        var tokenPair = tokenService.Issue(user.Id, user.OrganizationId, Guid.CreateVersion7(), roles, []);
         var session   = Session.Create(
             user.OrganizationId, user.Id,
             tokenPair.RefreshTokenHash,

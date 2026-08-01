@@ -30,23 +30,12 @@ public sealed class PasswordService : IPasswordService
 
     public string HashPassword(string password)
     {
-        return Argon2.Hash(new Argon2Config
-        {
-            Type        = _config.Type,
-            Version     = _config.Version,
-            TimeCost    = _config.TimeCost,
-            MemoryCost  = _config.MemoryCost,
-            Lanes       = _config.Lanes,
-            Threads     = _config.Threads,
-            HashLength  = _config.HashLength,
-            Password    = System.Text.Encoding.UTF8.GetBytes(password),
-            ClearPassword = true
-        });
+        return Argon2.Hash(password);
     }
 
     public bool VerifyPassword(string password, string hash)
     {
-        if (string.IsNullOrWhiteSpace(hash)) return false;
+        if (string.IsNullOrWhiteSpace(hash) || string.IsNullOrWhiteSpace(password)) return false;
         try
         {
             return Argon2.Verify(hash, password);

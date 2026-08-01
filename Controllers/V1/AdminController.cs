@@ -15,7 +15,7 @@ namespace EAIOS.Api.Controllers.V1;
 /// Route : /api/v1/admin
 /// </summary>
 [Route("api/v1/admin")]
-[Authorize(Roles = "platform.admin")]
+[Authorize(Roles = "platform.admin,Admin")]
 public sealed class AdminController(PlatformDbContext platformDb) : V1ApiController
 {
     // ── GET /api/v1/admin/tenants ─────────────────────────────────────────────
