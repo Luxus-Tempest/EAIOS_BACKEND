@@ -20,6 +20,9 @@ public abstract class TenantEntity : Entity<Guid>, ITenantScoped, ISoftDeletable
     public Guid? CreatedBy { get; private set; }
     public Guid? UpdatedBy { get; private set; }
 
+    // ── Concurrency ────────────────────────────────────────────────────────────
+    public uint Version { get; private set; }
+
     // ── Domain Events ──────────────────────────────────────────────────────────
     private readonly List<IDomainEvent> _domainEvents = [];
     public IReadOnlyList<IDomainEvent> DomainEvents => _domainEvents.AsReadOnly();

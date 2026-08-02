@@ -11,10 +11,9 @@ namespace EAIOS.Api.Controllers.V1;
 /// </summary>
 [Route("api/v1/knowledge")]
 public sealed class KnowledgeController(
+    EAIOS.Api.Application.Knowledge.IKnowledgeService knowledgeService,
     IKnowledgeItemRepository  itemRepo,
-    IKnowledgeChunkRepository chunkRepo,
-    IKnowledgePackRepository  packRepo,
-    ILlmService               llm) : V1ApiController
+    IKnowledgePackRepository  packRepo) : V1ApiController
 {
     // ── Items ─────────────────────────────────────────────────────────────────
 
@@ -42,62 +41,66 @@ public sealed class KnowledgeController(
     public async Task<IActionResult> CreateItem([FromBody] CreateKnowledgeItemRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var item = KnowledgeItem.Create(TenantId, req.Title, req.Type, KnowledgeItemSource.Manual, ActorId.Value, req.Content, req.SourceDocumentId);
-
-        await itemRepo.AddAsync(item, ct);
-        await itemRepo.SaveAsync(ct);
-
-        // Créer les chunks automatiquement
-        var chunks = ChunkText(item.Id, item.Content, TenantId);
-        await chunkRepo.AddRangeAsync(chunks, ct);
-        await chunkRepo.SaveAsync(ct);
-
+        var item = await knowledgeService.CreateItemAsync(TenantId, req.Title, req.Type, req.Content, req.SourceDocumentId, ActorId.Value, ct);
         return Created201("GetKnowledgeItem", new { id = item.Id }, MapItem(item));
     }
 
     [HttpPut("items/{id:guid}")]
     public async Task<IActionResult> UpdateItem(Guid id, [FromBody] UpdateKnowledgeItemRequest req, CancellationToken ct)
     {
-        var item = await itemRepo.GetByIdAsync(id, ct);
-        if (item == null) return NotFound();
-        item.Update(req.Title, req.Content, req.Summary, req.Tags, req.Language);
-        itemRepo.Update(item);
-        await itemRepo.SaveAsync(ct);
-        return Ok200(MapItem(item));
+        try
+        {
+            var item = await knowledgeService.UpdateItemAsync(id, req.Title, req.Content, req.Summary, req.Tags, req.Language, ct);
+            return Ok200(MapItem(item));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpPost("items/{id:guid}/publish")]
     public async Task<IActionResult> PublishItem(Guid id, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var item = await itemRepo.GetByIdAsync(id, ct);
-        if (item == null) return NotFound();
-        item.Publish(ActorId.Value);
-        itemRepo.Update(item);
-        await itemRepo.SaveAsync(ct);
-        return Ok200(MapItem(item));
+        try
+        {
+            var item = await knowledgeService.PublishItemAsync(id, ActorId.Value, ct);
+            return Ok200(MapItem(item));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpPost("items/{id:guid}/validate")]
     public async Task<IActionResult> ValidateItem(Guid id, [FromBody] ValidateKnowledgeItemRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var item = await itemRepo.GetByIdAsync(id, ct);
-        if (item == null) return NotFound();
-        item.Validate(true, ActorId.Value);
-        itemRepo.Update(item);
-        await itemRepo.SaveAsync(ct);
-        return Ok200(MapItem(item));
+        try
+        {
+            var item = await knowledgeService.ValidateItemAsync(id, ActorId.Value, ct);
+            return Ok200(MapItem(item));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpDelete("items/{id:guid}")]
     public async Task<IActionResult> DeleteItem(Guid id, CancellationToken ct)
     {
-        var item = await itemRepo.GetByIdAsync(id, ct);
-        if (item == null) return NotFound();
-        itemRepo.SoftDelete(item);
-        await itemRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await knowledgeService.DeleteItemAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Packs ─────────────────────────────────────────────────────────────────
@@ -120,20 +123,22 @@ public sealed class KnowledgeController(
     public async Task<IActionResult> CreatePack([FromBody] CreateKnowledgePackRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var pack = KnowledgePack.Create(TenantId, req.Name, ActorId.Value, req.Description, req.IsPublic);
-        await packRepo.AddAsync(pack, ct);
-        await packRepo.SaveAsync(ct);
+        var pack = await knowledgeService.CreatePackAsync(TenantId, req.Name, req.Description, req.IsPublic, ActorId.Value, ct);
         return Created201("GetKnowledgePack", new { id = pack.Id }, MapPack(pack));
     }
 
     [HttpDelete("packs/{id:guid}")]
     public async Task<IActionResult> DeletePack(Guid id, CancellationToken ct)
     {
-        var pack = await packRepo.GetByIdAsync(id, ct);
-        if (pack == null) return NotFound();
-        packRepo.SoftDelete(pack);
-        await packRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await knowledgeService.DeletePackAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── RAG Ask ───────────────────────────────────────────────────────────────
@@ -142,48 +147,11 @@ public sealed class KnowledgeController(
     public async Task<IActionResult> Ask([FromBody] AskRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-
-        // Recherche sémantique dans la base de connaissance
-        var items = await itemRepo.SearchAsync(req.Question, null, KnowledgeItemStatus.Published, req.PackId, 1, 5, ct);
-        var context = string.Join("\n\n---\n\n", items.Items.Select(i => $"### {i.Title}\n{i.Content}"));
-
-        var systemPrompt = $"""
-            Tu es EAIOS, un assistant IA intelligent. Réponds en français à la question de l'utilisateur 
-            en te basant UNIQUEMENT sur le contexte fourni ci-dessous. 
-            Si la réponse n'est pas dans le contexte, dis-le clairement.
-            
-            CONTEXTE:
-            {(string.IsNullOrWhiteSpace(context) ? "Aucun document pertinent trouvé." : context)}
-            """;
-
-        var result = await llm.GenerateAsync(systemPrompt, req.Question, null, ct);
-
-        return Ok200(new AskResponse(
-            Answer:  result.Output,
-            Sources: items.Items.Select(i => new SourceRef(i.Id, i.Title, i.Type)).ToList(),
-            PromptTokens: result.PromptTokens,
-            CompletionTokens: result.CompletionTokens));
+        var response = await knowledgeService.AskAsync(req.Question, req.PackId, ct);
+        return Ok200(response);
     }
 
-    // ── Chunking helper ───────────────────────────────────────────────────────
 
-    private static List<KnowledgeChunk> ChunkText(Guid itemId, string? content, Guid orgId)
-    {
-        if (string.IsNullOrWhiteSpace(content)) return [];
-        const int chunkSize = 1000;
-        const int overlap   = 100;
-        var chunks = new List<KnowledgeChunk>();
-        var i = 0;
-        var idx = 0;
-        while (i < content.Length)
-        {
-            var end  = Math.Min(i + chunkSize, content.Length);
-            var text = content[i..end];
-            chunks.Add(KnowledgeChunk.Create(orgId, itemId, idx++, text, text.Length / 4 + 1));
-            i += chunkSize - overlap;
-        }
-        return chunks;
-    }
 
     // ── Mappers ───────────────────────────────────────────────────────────────
     private static object MapItem(KnowledgeItem i) => new

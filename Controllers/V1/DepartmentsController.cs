@@ -10,7 +10,9 @@ namespace EAIOS.Api.Controllers.V1;
 /// Route : /api/v1/departments
 /// </summary>
 [Route("api/v1/departments")]
+[Microsoft.AspNetCore.Authorization.Authorize]
 public sealed class DepartmentsController(
+    IDepartmentService departmentService,
     IDepartmentRepository departmentRepo,
     IMembershipRepository membershipRepo) : V1ApiController
 {
@@ -41,47 +43,60 @@ public sealed class DepartmentsController(
 
     // ── POST /api/v1/departments ──────────────────────────────────────────────
     [HttpPost]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "department.manage")]
     public async Task<IActionResult> Create([FromBody] CreateDepartmentRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-
-        var dept = Department.Create(
-            TenantId, req.Name, ActorId.Value, req.ParentId, req.Description);
-
-        await departmentRepo.AddAsync(dept, ct);
-        await departmentRepo.SaveAsync(ct);
-
-        return Created201("GetDepartment", new { id = dept.Id }, MapDept(dept));
+        
+        try
+        {
+            var dept = await departmentService.CreateDepartmentAsync(TenantId, req.Name, ActorId.Value, req.ParentId, req.Description, ct);
+            return Created201("GetDepartment", new { id = dept.Id }, MapDept(dept));
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "NAME_ALREADY_EXISTS")
+        {
+            return Conflict(new { code = "NAME_ALREADY_EXISTS", message = "Un département porte déjà ce nom à ce niveau." });
+        }
     }
 
     // ── PUT /api/v1/departments/{id} ──────────────────────────────────────────
     [HttpPut("{id:guid}")]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "department.manage")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDepartmentRequest req, CancellationToken ct)
     {
-        var dept = await departmentRepo.GetByIdAsync(id, ct);
-        if (dept == null) return NotFound();
-
-        dept.Update(req.Name, req.Description, req.ManagerId, req.Code);
-        departmentRepo.Update(dept);
-        await departmentRepo.SaveAsync(ct);
-
-        return Ok200(MapDept(dept));
+        try
+        {
+            var dept = await departmentService.UpdateDepartmentAsync(id, req.Name, req.Description, req.ManagerId, req.Code, ct);
+            return Ok200(MapDept(dept));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "NAME_ALREADY_EXISTS")
+        {
+            return Conflict(new { code = "NAME_ALREADY_EXISTS", message = "Un département porte déjà ce nom à ce niveau." });
+        }
     }
 
     // ── DELETE /api/v1/departments/{id} ───────────────────────────────────────
     [HttpDelete("{id:guid}")]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "department.manage")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var dept = await departmentRepo.GetByIdAsync(id, ct);
-        if (dept == null) return NotFound();
-
-        var children = await departmentRepo.GetChildrenAsync(id, ct);
-        if (children.Count > 0)
+        try
+        {
+            await departmentService.DeleteDepartmentAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "HAS_CHILDREN")
+        {
             return UnprocessableEntity("Supprimez d'abord les sous-départements avant de supprimer ce département.");
-
-        departmentRepo.SoftDelete(dept);
-        await departmentRepo.SaveAsync(ct);
-        return NoContent204();
+        }
     }
 
     // ── GET /api/v1/departments/{id}/members ──────────────────────────────────
@@ -105,43 +120,43 @@ public sealed class DepartmentsController(
 
     // ── POST /api/v1/departments/{id}/members ─────────────────────────────────
     [HttpPost("{id:guid}/members")]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "department.manage")]
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddMemberRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var dept = await departmentRepo.GetByIdAsync(id, ct);
-        if (dept == null) return NotFound();
-
-        var existing = await membershipRepo.FindAsync(req.UserId, null, id, ct);
-        if (existing != null)
-            return Conflict("Cet utilisateur est déjà membre de ce département.");
-
-        var membership = Membership.Create(TenantId, req.UserId,
-            MembershipType.Member, departmentId: id);
-
-        await membershipRepo.AddAsync(membership, ct);
-        await membershipRepo.SaveAsync(ct);
-
-        return Ok200(new
+        try
         {
-            membership.Id,
-            membership.UserId,
-            Role = membership.Type,
-            membership.Status,
-            membership.JoinedAt
-        });
+            var membership = await departmentService.AddMemberAsync(TenantId, id, req.UserId, ct);
+            return Ok200(new
+            {
+                membership.Id,
+                membership.UserId,
+                Role = membership.Type,
+                membership.Status,
+                membership.JoinedAt
+            });
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "ALREADY_MEMBER")
+        {
+            return Conflict("Cet utilisateur est déjà membre de ce département.");
+        }
     }
 
     // ── DELETE /api/v1/departments/{id}/members/{userId} ──────────────────────
     [HttpDelete("{id:guid}/members/{userId:guid}")]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "department.manage")]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken ct)
     {
-        var membership = await membershipRepo.FindAsync(userId, null, id, ct);
-        if (membership == null) return NotFound();
-
-        membershipRepo.SoftDelete(membership);
-        await membershipRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await departmentService.RemoveMemberAsync(id, userId, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Mapper ────────────────────────────────────────────────────────────────

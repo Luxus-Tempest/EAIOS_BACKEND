@@ -69,3 +69,16 @@ public sealed record TenantSummaryDto(
     long StorageQuotaBytes,
     DateTime CreatedAt,
     DateTime? TrialEndsAt);
+
+public sealed record CreateTenantRequest(
+    string Name,
+    string Slug,
+    string PlanId,
+    string AdminEmail,
+    string AdminPassword);
+
+public sealed record UpdateLicenseRequest(
+    string PlanId,
+    int MaxUsers,
+    long StorageQuotaBytes,
+    DateTime? TrialEndsAt);

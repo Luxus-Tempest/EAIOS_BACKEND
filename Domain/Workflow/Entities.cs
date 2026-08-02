@@ -23,7 +23,7 @@ public sealed class WorkflowDefinition : TenantEntity
     public string? Description { get; private set; }
     public string Category { get; private set; } = "General";
     public WorkflowDefinitionStatus Status { get; private set; }
-    public string Version { get; private set; } = "1.0.0";
+    public new string Version { get; private set; } = "1.0.0";
     public int VersionNumber { get; private set; } = 1;
     public Guid? PublishedVersionId { get; private set; }
     public Guid OwnerId { get; private set; }

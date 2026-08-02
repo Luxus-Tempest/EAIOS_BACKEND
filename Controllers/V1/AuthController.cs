@@ -142,17 +142,6 @@ public sealed class AuthController(
         return Ok200(MapUser(user));
     }
 
-    // ── GET /api/v1/auth/me ───────────────────────────────────────────────────
-    [HttpGet("me")]
-    [Authorize]
-    public async Task<IActionResult> Me(CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
-        if (user == null) return NotFound();
-        return Ok200(MapUser(user));
-    }
-
     // ── MFA : Setup ───────────────────────────────────────────────────────────
     [HttpPost("mfa/setup")]
     [Authorize]
@@ -181,7 +170,6 @@ public sealed class AuthController(
         if (!totpService.VerifyCode(req.Secret, req.Code))
             return BadRequest(new { code = "INVALID_TOTP_CODE", message = "Code de vérification invalide." });
 
-        // Persister la credential MFA
         var cred = MfaCredential.Create(user.OrganizationId, user.Id, MfaMethod.Totp, req.Secret);
         var backupHashes = req.BackupCodes.Select(c => totpService.HashBackupCode(c)).ToArray();
         cred.Activate(System.Text.Json.JsonSerializer.Serialize(backupHashes));
@@ -212,67 +200,6 @@ public sealed class AuthController(
 
         await userRepo.SaveAsync(ct);
         return Ok(new { message = "MFA désactivé." });
-    }
-
-    // ── Sessions ──────────────────────────────────────────────────────────────
-    [HttpGet("sessions")]
-    [Authorize]
-    public async Task<IActionResult> GetSessions(CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var sessions = await sessionRepo.GetActiveByUserAsync(ActorId.Value, ct);
-        var dtos = sessions.Select(s => new SessionDto(s.Id, s.IpAddress, s.UserAgent, s.LastActivityAt, s.CreatedAt, s.ExpiresAt, false)).ToList();
-        return Ok200(dtos);
-    }
-
-    [HttpDelete("sessions/{id:guid}")]
-    [Authorize]
-    public async Task<IActionResult> RevokeSession(Guid id, CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var session = await sessionRepo.GetByIdAsync(id, ct);
-        if (session == null || session.UserId != ActorId.Value) return NotFound();
-        session.Revoke("user_request");
-        await sessionRepo.SaveAsync(ct);
-        return NoContent204();
-    }
-
-    // ── API Keys ──────────────────────────────────────────────────────────────
-    [HttpGet("api-keys")]
-    [Authorize]
-    public async Task<IActionResult> ListApiKeys(CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var keys = await apiKeyRepo.GetByUserAsync(ActorId.Value, ct);
-        var dtos = keys.Select(k => new ApiKeyDto(k.Id, k.Name, k.KeyPrefix, k.Scopes, k.IsActive, k.ExpiresAt, k.LastUsedAt, k.CreatedAt)).ToList();
-        return Ok200(dtos);
-    }
-
-    [HttpPost("api-keys")]
-    [Authorize]
-    public async Task<IActionResult> CreateApiKey([FromBody] CreateApiKeyRequest req, CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var (fullKey, prefix, hash) = apiKeyService.Generate();
-        var apiKey = ApiKey.Create(TenantId, ActorId.Value, req.Name, prefix, hash, req.Scopes, req.ExpiresAt);
-
-        await apiKeyRepo.AddAsync(apiKey, ct);
-        await apiKeyRepo.SaveAsync(ct);
-
-        // Retourner la clé en clair UNE SEULE FOIS
-        return Ok200(new ApiKeyCreatedDto(apiKey.Id, apiKey.Name, apiKey.KeyPrefix, fullKey, apiKey.Scopes, apiKey.ExpiresAt, apiKey.CreatedAt));
-    }
-
-    [HttpDelete("api-keys/{id:guid}")]
-    [Authorize]
-    public async Task<IActionResult> RevokeApiKey(Guid id, CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var key = await apiKeyRepo.GetByIdAsync(id, ct);
-        if (key == null || key.UserId != ActorId.Value) return NotFound();
-        apiKeyRepo.SoftDelete(key);
-        await apiKeyRepo.SaveAsync(ct);
-        return NoContent204();
     }
 
     // ── Mapper ────────────────────────────────────────────────────────────────

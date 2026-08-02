@@ -100,4 +100,11 @@ public sealed class NotificationTemplate : TenantEntity
         t.SetCreated(createdBy);
         return t;
     }
+
+    public void Update(string? subjectTemplate, string? bodyTemplate, bool? isActive)
+    {
+        if (subjectTemplate is not null) SubjectTemplate = subjectTemplate;
+        if (bodyTemplate is not null) BodyTemplate = bodyTemplate;
+        if (isActive.HasValue) IsActive = isActive.Value;
+    }
 }

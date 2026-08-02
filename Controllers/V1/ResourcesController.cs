@@ -3,6 +3,7 @@ using EAIOS.Api.Domain.Resource;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Resource;
 using EAIOS.Api.Infrastructure.Storage;
 using EAIOS.Api.Infrastructure.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EAIOS.Api.Controllers.V1;
@@ -10,8 +11,10 @@ namespace EAIOS.Api.Controllers.V1;
 /// <summary>
 /// Ressources documentaires : CRUD, upload, versioning, partage, corbeille, holds légaux.
 /// </summary>
-[Route("api/v1/resources")]
-public sealed class ResourcesController(
+[Route("api/v1/documents")]
+[Authorize]
+public sealed class DocumentsController(
+    EAIOS.Api.Application.Resource.IDocumentService documentService,
     IDocumentRepository        documentRepo,
     IDocumentVersionRepository versionRepo,
     IFolderRepository          folderRepo,
@@ -20,50 +23,7 @@ public sealed class ResourcesController(
     IStorageService            storage,
     IPermissionService         permService) : V1ApiController
 {
-    // ── Dossiers ──────────────────────────────────────────────────────────────
-
-    [HttpGet("folders")]
-    public async Task<IActionResult> GetFolders(
-        [FromQuery] Guid? parentId,
-        [FromQuery] Guid? workspaceId,
-        [FromQuery] Guid? departmentId,
-        CancellationToken ct)
-    {
-        var folders = await folderRepo.GetChildrenAsync(parentId, workspaceId, departmentId, ct);
-        return Ok200(folders.Select(MapFolder).ToList());
-    }
-
-    [HttpPost("folders")]
-    public async Task<IActionResult> CreateFolder([FromBody] CreateFolderRequest req, CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-
-        var parent = req.ParentId.HasValue ? await folderRepo.GetByIdAsync(req.ParentId.Value, ct) : null;
-        var folder = Folder.Create(TenantId, req.Name, ActorId.Value, req.ParentId, parent?.Path ?? "/", parent?.Depth ?? 0, req.WorkspaceId, req.DepartmentId);
-
-        await folderRepo.AddAsync(folder, ct);
-        await folderRepo.SaveAsync(ct);
-
-        return Created201("GetFolder", new { id = folder.Id }, MapFolder(folder));
-    }
-
-    [HttpGet("folders/{id:guid}", Name = "GetFolder")]
-    public async Task<IActionResult> GetFolder(Guid id, CancellationToken ct)
-    {
-        var folder = await folderRepo.GetByIdAsync(id, ct);
-        return folder == null ? NotFound() : Ok200(MapFolder(folder));
-    }
-
-    [HttpDelete("folders/{id:guid}")]
-    public async Task<IActionResult> DeleteFolder(Guid id, CancellationToken ct)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        var folder = await folderRepo.GetByIdAsync(id, ct);
-        if (folder == null) return NotFound();
-        folderRepo.SoftDelete(folder);
-        await folderRepo.SaveAsync(ct);
-        return NoContent204();
-    }
+    // ── Documents (Metadonnées, versions, partages, holds) ────────────────────
 
     // ── Documents ─────────────────────────────────────────────────────────────
 
@@ -90,32 +50,7 @@ public sealed class ResourcesController(
         return doc == null ? NotFound() : Ok200(MapDocument(doc));
     }
 
-    [HttpPost("upload")]
-    public async Task<IActionResult> Upload(
-        IFormFile file,
-        [FromQuery] Guid? folderId,
-        [FromQuery] Guid? workspaceId,
-        [FromQuery] ResourceClassification classification = ResourceClassification.Internal,
-        CancellationToken ct = default)
-    {
-        if (!ActorId.HasValue) return Unauthorized();
-        if (file.Length == 0) return BadRequest(new { code = "EMPTY_FILE" });
-
-        await using var stream = file.OpenReadStream();
-        var result = await storage.UploadAsync(stream, file.FileName, file.ContentType, TenantId.ToString(), ct);
-
-        var doc = Document.Create(
-            TenantId, file.FileName, ActorId.Value,
-            classification: classification, folderId: folderId, workspaceId: workspaceId);
-
-        var version = DocumentVersion.Create(TenantId, doc.Id, 1, result.StorageKey, file.FileName, file.ContentType, file.Length, ActorId.Value, "Première version");
-
-        await documentRepo.AddAsync(doc, ct);
-        await versionRepo.AddAsync(version, ct);
-        await documentRepo.SaveAsync(ct);
-
-        return Created201("GetDocument", new { id = doc.Id }, MapDocument(doc));
-    }
+    // Upload logic moved to ResourceUploadsController
 
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDocumentRequest req, CancellationToken ct)
@@ -133,28 +68,33 @@ public sealed class ResourcesController(
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var doc = await documentRepo.GetByIdAsync(id, ct);
-        if (doc == null) return NotFound();
-
-        // Vérifier legal hold
-        var holds = await holdRepo.GetActiveByDocumentAsync(id, ct);
-        if (holds.Count > 0) return UnprocessableEntity("Ce document est sous hold légal et ne peut pas être supprimé.");
-
-        doc.MoveToTrash();
-        documentRepo.Update(doc);
-        await documentRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await documentService.DeleteDocumentAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "LEGAL_HOLD_ACTIVE")
+        {
+            return UnprocessableEntity("Ce document est sous hold légal et ne peut pas être supprimé.");
+        }
     }
 
     [HttpPost("{id:guid}/restore")]
     public async Task<IActionResult> Restore(Guid id, CancellationToken ct)
     {
-        var doc = await documentRepo.GetByIdAsync(id, ct);
-        if (doc == null) return NotFound();
-        doc.Restore();
-        documentRepo.Update(doc);
-        await documentRepo.SaveAsync(ct);
-        return Ok200(MapDocument(doc));
+        try
+        {
+            var doc = await documentService.RestoreDocumentAsync(id, ct);
+            return Ok200(MapDocument(doc));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Versions ──────────────────────────────────────────────────────────────
@@ -221,9 +161,7 @@ public sealed class ResourcesController(
     public async Task<IActionResult> CreateLegalHold(Guid id, [FromBody] CreateLegalHoldRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var hold = LegalHold.Create(TenantId, id, req.Reason, ActorId.Value, req.CaseReference);
-        await holdRepo.AddAsync(hold, ct);
-        await holdRepo.SaveAsync(ct);
+        var hold = await documentService.CreateLegalHoldAsync(TenantId, id, req.Reason, ActorId.Value, req.CaseReference, ct);
         return Ok200(hold);
     }
 
@@ -231,12 +169,19 @@ public sealed class ResourcesController(
     public async Task<IActionResult> ReleaseLegalHold(Guid id, Guid holdId, [FromBody] ReleaseLegalHoldRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var hold = await holdRepo.GetByIdAsync(holdId, ct);
-        if (hold == null || hold.DocumentId != id) return NotFound();
-        hold.Release(ActorId.Value, req.Reason);
-        holdRepo.Update(hold);
-        await holdRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await documentService.ReleaseLegalHoldAsync(id, holdId, ActorId.Value, req.Reason, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException)
+        {
+            return BadRequest();
+        }
     }
 
     // ── Mappers ───────────────────────────────────────────────────────────────
@@ -247,10 +192,7 @@ public sealed class ResourcesController(
         d.CreatedAt, d.UpdatedAt
     };
 
-    private static object MapFolder(Folder f) => new
-    {
-        f.Id, f.Name, f.Path, f.Depth, f.ParentId, f.WorkspaceId, f.DepartmentId, f.CreatedAt
-    };
+    // Removed MapFolder
 
     private static object MapVersion(DocumentVersion v) => new
     {

@@ -3,6 +3,7 @@ using EAIOS.Api.Domain.Search;
 using EAIOS.Api.Domain.Analytics;
 using EAIOS.Api.Domain.Notification;
 using EAIOS.Api.Domain.Connector;
+using EAIOS.Api.Domain.Webhook;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Base;
 using Microsoft.EntityFrameworkCore;
 
@@ -64,6 +65,42 @@ public sealed class NotificationRepository(EaiosDbContext db) : RepositoryBase<N
     }
 }
 
+// ── INotificationTemplateRepository ────────────────────────────────────────
+
+public interface INotificationTemplateRepository
+{
+    Task<NotificationTemplate?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<NotificationTemplate>> GetAllAsync(CancellationToken ct = default);
+    Task AddAsync(NotificationTemplate template, CancellationToken ct = default);
+    void Update(NotificationTemplate template);
+    void SoftDelete(NotificationTemplate template);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class NotificationTemplateRepository(EaiosDbContext db) : RepositoryBase<NotificationTemplate>(db), INotificationTemplateRepository
+{
+    public async Task<IReadOnlyList<NotificationTemplate>> GetAllAsync(CancellationToken ct = default) =>
+        await Set.Where(t => t.IsActive).OrderBy(t => t.EventType).ToListAsync(ct);
+}
+
+// ── IWebhookSubscriptionRepository ──────────────────────────────────────────
+
+public interface IWebhookSubscriptionRepository
+{
+    Task<WebhookSubscription?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<WebhookSubscription>> GetActiveSubscriptionsAsync(Guid tenantId, CancellationToken ct = default);
+    Task AddAsync(WebhookSubscription subscription, CancellationToken ct = default);
+    void Update(WebhookSubscription subscription);
+    void SoftDelete(WebhookSubscription subscription);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class WebhookSubscriptionRepository(EaiosDbContext db) : RepositoryBase<WebhookSubscription>(db), IWebhookSubscriptionRepository
+{
+    public async Task<IReadOnlyList<WebhookSubscription>> GetActiveSubscriptionsAsync(Guid tenantId, CancellationToken ct = default) =>
+        await Set.Where(w => w.OrganizationId == tenantId && w.IsActive).ToListAsync(ct);
+}
+
 // ── IAnalyticsEventRepository ────────────────────────────────────────────────
 
 public interface IAnalyticsEventRepository
@@ -76,7 +113,7 @@ public interface IAnalyticsEventRepository
 public sealed class AnalyticsEventRepository(EaiosDbContext db) : RepositoryBase<AnalyticsEvent>(db), IAnalyticsEventRepository
 {
     public override async Task AddRangeAsync(IEnumerable<AnalyticsEvent> events, CancellationToken ct = default) =>
-        await db.AnalyticsEvents.AddRangeAsync(events, ct);
+        await Db.AnalyticsEvents.AddRangeAsync(events, ct);
 }
 
 // ── IConnectorInstanceRepository ─────────────────────────────────────────────
@@ -95,6 +132,45 @@ public sealed class ConnectorInstanceRepository(EaiosDbContext db) : RepositoryB
 {
     public async Task<IReadOnlyList<ConnectorInstance>> GetAllAsync(CancellationToken ct = default) =>
         await Set.Include(c => c.SyncJobs).OrderBy(c => c.Name).ToListAsync(ct);
+}
+
+// ── IConnectorDefinitionRepository ───────────────────────────────────────────
+
+public interface IConnectorDefinitionRepository
+{
+    Task<ConnectorDefinition?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<ConnectorDefinition>> GetAllAsync(CancellationToken ct = default);
+    Task AddAsync(ConnectorDefinition definition, CancellationToken ct = default);
+    void Update(ConnectorDefinition definition);
+    void SoftDelete(ConnectorDefinition definition);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class ConnectorDefinitionRepository(EaiosDbContext db) : IConnectorDefinitionRepository
+{
+    public async Task<ConnectorDefinition?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
+        await db.ConnectorDefinitions.FirstOrDefaultAsync(d => d.Id == id, ct);
+
+    public async Task<IReadOnlyList<ConnectorDefinition>> GetAllAsync(CancellationToken ct = default) =>
+        await db.ConnectorDefinitions.Where(d => d.IsActive).OrderBy(d => d.Name).ToListAsync(ct);
+
+    public async Task AddAsync(ConnectorDefinition definition, CancellationToken ct = default) =>
+        await db.ConnectorDefinitions.AddAsync(definition, ct);
+
+    public void Update(ConnectorDefinition definition)
+    {
+        db.ConnectorDefinitions.Attach(definition);
+        db.Entry(definition).State = EntityState.Modified;
+    }
+
+    public void SoftDelete(ConnectorDefinition definition)
+    {
+        definition.IsActive = false; // ConnectorDefinition n'a pas IsDeleted par défaut, on met IsActive = false
+        Update(definition);
+    }
+
+    public async Task<int> SaveAsync(CancellationToken ct = default) =>
+        await db.SaveChangesAsync(ct);
 }
 
 // ── ISyncJobRepository ───────────────────────────────────────────────────────

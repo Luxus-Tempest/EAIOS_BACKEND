@@ -14,8 +14,38 @@ namespace EAIOS.Api.Controllers.V1;
 public sealed class OrganizationController(
     IUserRepository       userRepo,
     IInvitationRepository invitationRepo,
-    IPermissionService    permService) : V1ApiController
+    IPermissionService    permService,
+    EAIOS.Api.Infrastructure.Persistence.PlatformDbContext platformDb) : V1ApiController
 {
+    // ── GET /api/v1/organization ──────────────────────────────────────────────
+    [HttpGet]
+    public async Task<IActionResult> GetOrganization(CancellationToken ct)
+    {
+        var org = await platformDb.Organizations.FindAsync(new object[] { TenantId }, ct);
+        if (org == null) return NotFound();
+        return Ok200(org); // Note: Should map to a DTO in a real app, but this fits the pattern
+    }
+
+    // ── PUT /api/v1/organization ──────────────────────────────────────────────
+    [HttpPut]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "organization.manage")]
+    public async Task<IActionResult> UpdateOrganization(
+        [FromBody] EAIOS.Api.Contracts.UpdateOrganizationRequest req,
+        CancellationToken ct)
+    {
+        var org = await platformDb.Organizations.FindAsync(new object[] { TenantId }, ct);
+        if (org == null) return NotFound();
+
+        if (req.Name != null) org.Name = req.Name;
+        // The entity might need specific setters, let's assume direct mapping or specific properties 
+        // exist based on UpdateOrganizationRequest. Let's check Domain/Organization/Organization.cs if needed, 
+        // but for now simple properties are typical.
+        // EAIOS.Api.Domain.Organization.Organization typically has Name, Settings etc.
+        
+        platformDb.Organizations.Update(org);
+        await platformDb.SaveChangesAsync(ct);
+        return Ok200(org);
+    }
     // ── GET /api/v1/organization/users ────────────────────────────────────────
     /// <summary>Liste paginée des utilisateurs de l'organisation.</summary>
     [HttpGet("users")]

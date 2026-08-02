@@ -72,6 +72,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OrganizationId", "Code")
@@ -151,6 +157,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("policies", "acl");
@@ -211,6 +223,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -279,6 +297,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<int>("UserCount")
                         .HasColumnType("integer");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OrganizationId", "Name")
@@ -334,6 +358,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<Guid?>("WorkspaceId")
                         .HasColumnType("uuid");
@@ -455,6 +485,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<int>("VersionNumber")
                         .HasColumnType("integer");
@@ -580,6 +616,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<Guid?>("WorkflowInstanceId")
                         .HasColumnType("uuid");
 
@@ -660,6 +702,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("AgentMemories");
@@ -710,6 +758,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<int>("VersionNumber")
                         .HasColumnType("integer");
@@ -779,7 +833,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .HasColumnType("text[]");
 
                     b.Property<string>("Version")
+                        .IsConcurrencyToken()
                         .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
@@ -862,6 +918,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<string>("UserAgent")
                         .HasColumnType("text");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<Guid?>("WorkspaceId")
                         .HasColumnType("uuid");
 
@@ -872,6 +934,58 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.HasIndex("OrganizationId", "OccurredAt");
 
                     b.ToTable("events", "analytics");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Connector.ConnectorDefinition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AuthType")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Category")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LogoUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SchemaJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.PrimitiveCollection<string[]>("SupportedCapabilities")
+                        .IsRequired()
+                        .HasColumnType("text[]");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ConnectorDefinitions");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Connector.ConnectorInstance", b =>
@@ -936,6 +1050,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<Guid?>("WorkspaceId")
                         .HasColumnType("uuid");
@@ -1018,6 +1138,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ConnectorInstanceId", "Status");
@@ -1087,6 +1213,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -1183,6 +1315,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<Guid?>("WorkspaceId")
                         .HasColumnType("uuid");
 
@@ -1246,6 +1384,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -1322,6 +1466,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -1480,6 +1630,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("NormalizedEmail")
@@ -1553,6 +1709,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -1663,6 +1825,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("VerifiedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<int>("ViewCount")
                         .HasColumnType("integer");
 
@@ -1740,6 +1908,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("KnowledgePacks");
@@ -1796,6 +1970,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -1896,6 +2076,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("RecipientId", "ReadAt");
@@ -1964,6 +2150,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.PrimitiveCollection<string[]>("Variables")
                         .IsRequired()
                         .HasColumnType("text[]");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -2037,6 +2229,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.HasIndex("OrganizationId", "Code");
@@ -2091,6 +2289,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<Guid?>("WorkspaceId")
                         .HasColumnType("uuid");
@@ -2173,6 +2377,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -2290,6 +2500,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<int>("VersionCount")
                         .HasColumnType("integer");
 
@@ -2370,6 +2586,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -2462,6 +2684,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<int>("VersionNumber")
                         .HasColumnType("integer");
 
@@ -2552,6 +2780,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<Guid?>("WorkspaceId")
                         .HasColumnType("uuid");
 
@@ -2620,6 +2854,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("LegalHolds");
@@ -2676,6 +2916,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("MetadataTemplates");
@@ -2730,6 +2976,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Value")
                         .HasColumnType("text");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -2802,6 +3054,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("Embeddings");
@@ -2873,9 +3131,83 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.HasKey("Id");
 
                     b.ToTable("SavedSearches");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Webhook.WebhookSubscription", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("LastTriggeredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Secret")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SubscribedEvents")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("WebhookSubscriptions");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Workflow.WorkflowDefinition", b =>
@@ -2953,7 +3285,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .HasColumnType("uuid");
 
                     b.Property<string>("Version")
+                        .IsConcurrencyToken()
                         .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("text");
 
                     b.Property<int>("VersionNumber")
@@ -3012,6 +3346,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<string>("VersionLabel")
                         .IsRequired()
@@ -3103,6 +3443,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<string>("VariablesJson")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<Guid?>("WorkflowDefinitionId")
                         .HasColumnType("uuid");
@@ -3206,6 +3552,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("UpdatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 

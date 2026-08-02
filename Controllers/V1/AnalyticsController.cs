@@ -1,4 +1,4 @@
-using EAIOS.Api.Infrastructure.Persistence.Repositories.Misc;
+using EAIOS.Api.Application.Analytics;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EAIOS.Api.Controllers.V1;
@@ -9,7 +9,7 @@ namespace EAIOS.Api.Controllers.V1;
 /// </summary>
 [Route("api/v1/analytics")]
 public sealed class AnalyticsController(
-    IAnalyticsEventRepository analyticsRepo) : V1ApiController
+    IAnalyticsQueryService queryService) : V1ApiController
 {
     // ── GET /api/v1/analytics/summary ─────────────────────────────────────────
     /// <summary>Résumé des métriques principales de l'organisation.</summary>
@@ -18,48 +18,49 @@ public sealed class AnalyticsController(
         [FromQuery] string period = "30d",
         CancellationToken ct = default)
     {
-        // En production : requêtes SQL agrégées par période, avec cache Redis
-        // Pour l'instant : stub avec structure complète pour le front-end
-        var summary = new
-        {
-            Period = period,
-            Documents = new
-            {
-                Total     = 0,
-                Uploaded  = 0,
-                Indexed   = 0,
-                StorageGb = 0.0
-            },
-            Agents = new
-            {
-                Total      = 0,
-                Executions = 0,
-                SuccessRate = 0.0,
-                AvgDurationMs = 0
-            },
-            Workflows = new
-            {
-                Total     = 0,
-                Running   = 0,
-                Completed = 0,
-                Failed    = 0
-            },
-            Knowledge = new
-            {
-                Items      = 0,
-                AskQueries = 0,
-                AvgRating  = 0.0
-            },
-            Users = new
-            {
-                Active  = 0,
-                Invited = 0,
-                MfaEnabled = 0
-            },
-            Note = "Données agrégées temps-réel disponibles en production via PostgreSQL + Redis."
-        };
-
+        if (!ActorId.HasValue) return Unauthorized();
+        var summary = await queryService.SummaryAsync(TenantId, period, ct);
         return Ok200(summary);
+    }
+
+    [HttpGet("dashboard")]
+    public async Task<IActionResult> Dashboard(
+        [FromQuery] string period = "30d",
+        CancellationToken ct = default)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var dashboard = await queryService.GetDashboardAsync(TenantId, period, ct);
+        return Ok200(dashboard);
+    }
+
+    [HttpGet("search")]
+    public async Task<IActionResult> SearchAnalytics(
+        [FromQuery] string period = "30d",
+        CancellationToken ct = default)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var data = await queryService.GetSearchAnalyticsAsync(TenantId, period, ct);
+        return Ok200(data);
+    }
+
+    [HttpGet("agents")]
+    public async Task<IActionResult> AgentAnalytics(
+        [FromQuery] string period = "30d",
+        CancellationToken ct = default)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var data = await queryService.GetAgentAnalyticsAsync(TenantId, period, ct);
+        return Ok200(data);
+    }
+
+    [HttpGet("workflows")]
+    public async Task<IActionResult> WorkflowAnalytics(
+        [FromQuery] string period = "30d",
+        CancellationToken ct = default)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var data = await queryService.GetWorkflowAnalyticsAsync(TenantId, period, ct);
+        return Ok200(data);
     }
 
     // ── GET /api/v1/analytics/usage ───────────────────────────────────────────
@@ -71,15 +72,9 @@ public sealed class AnalyticsController(
         [FromQuery] string granularity = "day",
         CancellationToken ct = default)
     {
-        // Stub — en production : time-series depuis PostgreSQL ou InfluxDB
-        return Ok200(new
-        {
-            Metric      = metric,
-            Period      = period,
-            Granularity = granularity,
-            Series      = Array.Empty<object>(),
-            Note        = "Séries temporelles disponibles en production."
-        });
+        if (!ActorId.HasValue) return Unauthorized();
+        var usage = await queryService.UsageAsync(TenantId, metric, period, granularity, ct);
+        return Ok200(usage);
     }
 
     // ── GET /api/v1/analytics/top ─────────────────────────────────────────────
@@ -91,11 +86,8 @@ public sealed class AnalyticsController(
         [FromQuery] string period  = "30d",
         CancellationToken ct = default)
     {
-        return Ok200(new
-        {
-            Type   = type,
-            Period = period,
-            Items  = Array.Empty<object>()
-        });
+        if (!ActorId.HasValue) return Unauthorized();
+        var top = await queryService.TopResourcesAsync(TenantId, type, limit, period, ct);
+        return Ok200(top);
     }
 }

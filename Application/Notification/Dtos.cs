@@ -34,3 +34,16 @@ public sealed record UpdatePreferencesRequest(
     bool? PushEnabled,
     string? DigestFrequency,
     IReadOnlyList<ChannelPreferenceDto>? ChannelOverrides);
+
+public sealed record CreateTemplateRequest(
+    string EventType,
+    NotificationChannel Channel,
+    string Language,
+    string SubjectTemplate,
+    string BodyTemplate,
+    bool IsSystem = false);
+
+public sealed record UpdateTemplateRequest(
+    string? SubjectTemplate,
+    string? BodyTemplate,
+    bool? IsActive);

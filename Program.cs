@@ -3,6 +3,8 @@ using EAIOS.Api.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using FluentValidation;
+using FluentValidation.AspNetCore;
 using System.Security.Cryptography;
 using Scalar.AspNetCore;
 
@@ -16,6 +18,10 @@ builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogL
 // ── Infrastructure (DbContexts, Repositories, Services) ──────────────────
 builder.Services.AddInfrastructureServices(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
+
+// ── Validation ────────────────────────────────────────────────────────────
+builder.Services.AddFluentValidationAutoValidation();
+builder.Services.AddValidatorsFromAssemblyContaining<EAIOS.Api.Application.Common.Validators.LoginRequestValidator>();
 
 // ── Authentication JWT ────────────────────────────────────────────────────
 var tokenSecret = builder.Configuration["Security:TokenSigningKey"] ?? "eaios-dev-signing-key-CHANGE-IN-PRODUCTION-must-be-at-least-64-characters-long!";
@@ -38,13 +44,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 // ── API Controllers ───────────────────────────────────────────────────────
-builder.Services.AddControllers()
+builder.Services.AddControllers(options => 
+    {
+        options.Filters.Add<EAIOS.Api.Middleware.ValidationFilter>();
+    })
     .AddJsonOptions(opts =>
     {
         opts.JsonSerializerOptions.DefaultIgnoreCondition =
             System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
         opts.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
     });
+    
+// Disable automatic 400 response to let our ValidationFilter handle it
+builder.Services.Configure<Microsoft.AspNetCore.Mvc.ApiBehaviorOptions>(options =>
+{
+    options.SuppressModelStateInvalidFilter = true;
+});
 
 // ── OpenAPI ───────────────────────────────────────────────────────────────
 builder.Services.AddOpenApi(options =>

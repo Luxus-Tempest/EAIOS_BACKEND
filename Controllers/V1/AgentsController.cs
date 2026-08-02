@@ -11,6 +11,7 @@ namespace EAIOS.Api.Controllers.V1;
 /// </summary>
 [Route("api/v1/agents")]
 public sealed class AgentsController(
+    IAgentService             agentService,
     IAgentRepository          agentRepo,
     IAgentExecutionRepository executionRepo,
     IAgentMemoryRepository    memoryRepo,
@@ -43,34 +44,37 @@ public sealed class AgentsController(
     public async Task<IActionResult> Create([FromBody] CreateAgentRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var agent = Domain.Agent.Agent.Create(
-            TenantId, req.Name, req.Type, ActorId.Value, req.Description, req.SystemPrompt);
-
-        await agentRepo.AddAsync(agent, ct);
-        await agentRepo.SaveAsync(ct);
+        var agent = await agentService.CreateAgentAsync(
+            TenantId, req.Name, req.Type, ActorId.Value, req.Description, req.SystemPrompt, ct);
         return Created201("GetAgent", new { id = agent.Id }, MapAgent(agent));
     }
 
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAgentRequest req, CancellationToken ct)
     {
-        var agent = await agentRepo.GetByIdAsync(id, ct);
-        if (agent == null) return NotFound();
-        var llmConfigJson = req.LlmConfig != null ? System.Text.Json.JsonSerializer.Serialize(req.LlmConfig) : null;
-        agent.Update(req.DisplayName, req.Description, req.SystemPrompt, llmConfigJson, req.KnowledgePackIds, req.EnabledTools, req.MemoryEnabled);
-        agentRepo.Update(agent);
-        await agentRepo.SaveAsync(ct);
-        return Ok200(MapAgent(agent));
+        try
+        {
+            var agent = await agentService.UpdateAgentAsync(id, req.DisplayName, req.Description, req.SystemPrompt, req.LlmConfig, req.KnowledgePackIds, req.EnabledTools, req.MemoryEnabled, ct);
+            return Ok200(MapAgent(agent));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        var agent = await agentRepo.GetByIdAsync(id, ct);
-        if (agent == null) return NotFound();
-        agentRepo.SoftDelete(agent);
-        await agentRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await agentService.DeleteAgentAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Exécution ─────────────────────────────────────────────────────────────
@@ -79,34 +83,21 @@ public sealed class AgentsController(
     public async Task<IActionResult> Execute(Guid id, [FromBody] ExecuteAgentRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-
-        var agent = await agentRepo.GetByIdAsync(id, ct);
-        if (agent == null) return NotFound();
-        if (agent.Status != AgentStatus.Published && agent.Status != AgentStatus.Draft)
-            return UnprocessableEntity("Cet agent n'est pas actif.");
-
-        Guid.TryParse(req.SessionId, out var parsedSessionId);
-        var execution = AgentExecution.Create(TenantId, id, "1.0.0", req.Input, ActorId.Value, parsedSessionId == Guid.Empty ? null : parsedSessionId);
-        execution.Start();
-        await executionRepo.AddAsync(execution, ct);
-        await executionRepo.SaveAsync(ct);
-
+        
         try
         {
-            var opts = new LlmOptions("gpt-4o", 0.7f);
-            var result = await llm.GenerateAsync(agent.SystemPrompt ?? "", req.Input, opts, ct);
-
-            execution.Complete(result.Output, result.PromptTokens, result.CompletionTokens, result.CostUsd, result.ModelUsed);
+            Guid.TryParse(req.SessionId, out var parsedSessionId);
+            var execution = await agentService.ExecuteAsync(TenantId, id, req.Input, ActorId.Value, parsedSessionId == Guid.Empty ? null : parsedSessionId, ct);
+            return Ok200(MapExecution(execution));
         }
-        catch (Exception ex)
+        catch (KeyNotFoundException)
         {
-            execution.Fail("EXECUTION_FAILED", ex.Message);
+            return NotFound();
         }
-
-        executionRepo.Update(execution);
-        await executionRepo.SaveAsync(ct);
-
-        return Ok200(MapExecution(execution));
+        catch (InvalidOperationException ex) when (ex.Message == "AGENT_NOT_ACTIVE")
+        {
+            return UnprocessableEntity("Cet agent n'est pas actif.");
+        }
     }
 
     [HttpPost("{id:guid}/execute/stream")]
@@ -157,30 +148,22 @@ public sealed class AgentsController(
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var existing = await memoryRepo.FindByKeyAsync(id, ActorId.Value, req.Type, req.Key, ct);
-        if (existing != null)
-        {
-            existing.UpdateContent(req.Value, req.ImportanceScore);
-            memoryRepo.Update(existing);
-        }
-        else
-        {
-            var memory = AgentMemory.Create(TenantId, id, req.Type, req.Key, req.Value, ActorId.Value, req.ImportanceScore);
-            await memoryRepo.AddAsync(memory, ct);
-        }
-
-        await memoryRepo.SaveAsync(ct);
+        await agentService.UpsertMemoryAsync(TenantId, id, req.Type, req.Key, req.Value, ActorId.Value, req.ImportanceScore, ct);
         return Ok(new { message = "Mémoire mise à jour." });
     }
 
     [HttpDelete("{id:guid}/memory/{memoryId:guid}")]
     public async Task<IActionResult> DeleteMemory(Guid id, Guid memoryId, CancellationToken ct)
     {
-        var memory = await memoryRepo.GetByIdAsync(memoryId, ct);
-        if (memory == null || memory.AgentId != id) return NotFound();
-        memoryRepo.SoftDelete(memory);
-        await memoryRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await agentService.DeleteMemoryAsync(id, memoryId, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Mappers ───────────────────────────────────────────────────────────────

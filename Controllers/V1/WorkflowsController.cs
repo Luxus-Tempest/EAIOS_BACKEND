@@ -10,6 +10,7 @@ namespace EAIOS.Api.Controllers.V1;
 /// </summary>
 [Route("api/v1/workflows")]
 public sealed class WorkflowsController(
+    IWorkflowService              workflowService,
     IWorkflowDefinitionRepository definitionRepo,
     IWorkflowInstanceRepository   instanceRepo,
     IWorkflowTaskRepository       taskRepo) : V1ApiController
@@ -39,45 +40,51 @@ public sealed class WorkflowsController(
     public async Task<IActionResult> CreateDefinition([FromBody] CreateWorkflowDefinitionRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var def = WorkflowDefinition.Create(TenantId, req.Name, ActorId.Value, req.Description, req.NodesJson);
-
-        await definitionRepo.AddAsync(def, ct);
-        await definitionRepo.SaveAsync(ct);
+        var def = await workflowService.CreateDefinitionAsync(TenantId, req.Name, req.Description, req.Category, req.NodesJson, ActorId.Value, ct);
         return Created201("GetWorkflowDefinition", new { id = def.Id }, MapDefinition(def));
     }
 
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> UpdateDefinition(Guid id, [FromBody] UpdateWorkflowDefinitionRequest req, CancellationToken ct)
     {
-        var def = await definitionRepo.GetByIdAsync(id, ct);
-        if (def == null) return NotFound();
-        def.Update(req.Name, req.Description, req.NodesJson, req.Category);
-        definitionRepo.Update(def);
-        await definitionRepo.SaveAsync(ct);
-        return Ok200(MapDefinition(def));
+        try
+        {
+            var def = await workflowService.UpdateDefinitionAsync(id, req.Name, req.Description, req.Category, req.NodesJson, ct);
+            return Ok200(MapDefinition(def));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpPost("{id:guid}/publish")]
     public async Task<IActionResult> Publish(Guid id, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var def = await definitionRepo.GetByIdAsync(id, ct);
-        if (def == null) return NotFound();
-        var versionId = Guid.CreateVersion7();
-        def.Publish(versionId, "1.0.0");
-        definitionRepo.Update(def);
-        await definitionRepo.SaveAsync(ct);
-        return Ok200(MapDefinition(def));
+        try
+        {
+            var def = await workflowService.PublishDefinitionAsync(id, ActorId.Value, ct);
+            return Ok200(MapDefinition(def));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> DeleteDefinition(Guid id, CancellationToken ct)
     {
-        var def = await definitionRepo.GetByIdAsync(id, ct);
-        if (def == null) return NotFound();
-        definitionRepo.SoftDelete(def);
-        await definitionRepo.SaveAsync(ct);
-        return NoContent204();
+        try
+        {
+            await workflowService.DeleteDefinitionAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Instances ─────────────────────────────────────────────────────────────
@@ -97,17 +104,19 @@ public sealed class WorkflowsController(
     public async Task<IActionResult> StartInstance(Guid id, [FromBody] StartWorkflowRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var def = await definitionRepo.GetByIdAsync(id, ct);
-        if (def == null) return NotFound();
-        if (def.Status != WorkflowDefinitionStatus.Published)
-            return UnprocessableEntity("Ce workflow doit être publié avant exécution.");
-
-        var variablesJson = req.Variables != null ? System.Text.Json.JsonSerializer.Serialize(req.Variables) : "{}";
-        var instance = WorkflowInstance.Create(TenantId, id, def.PublishedVersionId ?? Guid.Empty, def.Version, req.TriggerType, ActorId.Value, variablesJson, req.DueAt);
-        instance.Start("start");
-        await instanceRepo.AddAsync(instance, ct);
-        await instanceRepo.SaveAsync(ct);
-        return Ok200(MapInstance(instance));
+        try
+        {
+            var instance = await workflowService.StartInstanceAsync(TenantId, id, req.TriggerType, ActorId.Value, req.Variables, req.DueAt, ct);
+            return Ok200(MapInstance(instance));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
     }
 
     [HttpGet("instances/{instanceId:guid}")]
@@ -120,12 +129,15 @@ public sealed class WorkflowsController(
     [HttpPost("instances/{instanceId:guid}/cancel")]
     public async Task<IActionResult> CancelInstance(Guid instanceId, [FromBody] CancelWorkflowRequest req, CancellationToken ct)
     {
-        var instance = await instanceRepo.GetByIdAsync(instanceId, ct);
-        if (instance == null) return NotFound();
-        instance.Cancel();
-        instanceRepo.Update(instance);
-        await instanceRepo.SaveAsync(ct);
-        return Ok200(MapInstance(instance));
+        try
+        {
+            var instance = await workflowService.CancelInstanceAsync(instanceId, ct);
+            return Ok200(MapInstance(instance));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Tâches ────────────────────────────────────────────────────────────────
@@ -145,26 +157,33 @@ public sealed class WorkflowsController(
     public async Task<IActionResult> CompleteTask(Guid taskId, [FromBody] CompleteTaskRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var task = await taskRepo.GetByIdAsync(taskId, ct);
-        if (task == null) return NotFound();
-        if (task.AssigneeId != ActorId.Value)
-            return Forbidden("Vous n'êtes pas assigné à cette tâche.");
-        var formDataJson = req.FormData != null ? System.Text.Json.JsonSerializer.Serialize(req.FormData) : null;
-        task.Complete(ActorId.Value, req.Decision, req.Comment, formDataJson);
-        taskRepo.Update(task);
-        await taskRepo.SaveAsync(ct);
-        return Ok200(MapTask(task));
+        try
+        {
+            var task = await workflowService.CompleteTaskAsync(taskId, ActorId.Value, req.Decision, req.Comment, req.FormData, ct);
+            return Ok200(MapTask(task));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Forbidden(ex.Message);
+        }
     }
 
     [HttpPost("tasks/{taskId:guid}/reassign")]
     public async Task<IActionResult> ReassignTask(Guid taskId, [FromBody] ReassignTaskRequest req, CancellationToken ct)
     {
-        var task = await taskRepo.GetByIdAsync(taskId, ct);
-        if (task == null) return NotFound();
-        task.Reassign(req.NewAssigneeId, EAIOS.Api.Domain.Workflow.WorkflowTaskAssigneeType.User);
-        taskRepo.Update(task);
-        await taskRepo.SaveAsync(ct);
-        return Ok200(MapTask(task));
+        try
+        {
+            var task = await workflowService.ReassignTaskAsync(taskId, req.NewAssigneeId, ct);
+            return Ok200(MapTask(task));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── Mappers ───────────────────────────────────────────────────────────────

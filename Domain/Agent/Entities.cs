@@ -306,7 +306,7 @@ public sealed class PromptTemplate : TenantEntity
     public string[] Variables { get; private set; } = [];
     public string? Language { get; private set; }
     public bool IsSystem { get; private set; }
-    public string Version { get; private set; } = "1.0.0";
+    public new string Version { get; private set; } = "1.0.0";
     public Guid? ParentTemplateId { get; private set; }
 
     public static PromptTemplate Create(Guid organizationId, string name, PromptRole role,

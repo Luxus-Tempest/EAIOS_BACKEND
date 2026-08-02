@@ -1,3 +1,4 @@
+using EAIOS.Api.Application.Notification;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Misc;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,7 +9,8 @@ namespace EAIOS.Api.Controllers.V1;
 /// Route : /api/v1/notifications
 /// </summary>
 [Route("api/v1/notifications")]
-public sealed class NotificationsController(INotificationRepository notifRepo) : V1ApiController
+public sealed class NotificationsController(
+    INotificationService notifService) : V1ApiController
 {
     // ── GET /api/v1/notifications ─────────────────────────────────────────────
     [HttpGet]
@@ -20,7 +22,7 @@ public sealed class NotificationsController(INotificationRepository notifRepo) :
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var result = await notifRepo.GetByRecipientAsync(ActorId.Value, unreadOnly, page, pageSize, ct);
+        var result = await notifService.ListAsync(ActorId.Value, unreadOnly, page, pageSize, ct);
         return OkList(result.Items.Select(MapNotif).ToList(), result.TotalCount, page, pageSize);
     }
 
@@ -30,7 +32,7 @@ public sealed class NotificationsController(INotificationRepository notifRepo) :
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var count = await notifRepo.GetUnreadCountAsync(ActorId.Value, ct);
+        var count = await notifService.GetUnreadCountAsync(ActorId.Value, ct);
         return Ok200(new { Unread = count });
     }
 
@@ -40,14 +42,15 @@ public sealed class NotificationsController(INotificationRepository notifRepo) :
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var notif = await notifRepo.GetByIdAsync(id, ct);
-        if (notif == null || notif.RecipientId != ActorId.Value)
+        try
+        {
+            await notifService.MarkReadAsync(id, ActorId.Value, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
             return NotFound();
-
-        notif.MarkRead();
-        notifRepo.Update(notif);
-        await notifRepo.SaveAsync(ct);
-        return NoContent204();
+        }
     }
 
     // ── POST /api/v1/notifications/read-all ──────────────────────────────────
@@ -56,8 +59,7 @@ public sealed class NotificationsController(INotificationRepository notifRepo) :
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        await notifRepo.MarkAllReadAsync(ActorId.Value, ct);
-        await notifRepo.SaveAsync(ct);
+        await notifService.MarkAllReadAsync(ActorId.Value, ct);
         return NoContent204();
     }
 
@@ -67,13 +69,15 @@ public sealed class NotificationsController(INotificationRepository notifRepo) :
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var notif = await notifRepo.GetByIdAsync(id, ct);
-        if (notif == null || notif.RecipientId != ActorId.Value)
+        try
+        {
+            await notifService.DeleteAsync(id, ActorId.Value, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
             return NotFound();
-
-        notifRepo.SoftDelete(notif);
-        await notifRepo.SaveAsync(ct);
-        return NoContent204();
+        }
     }
 
     // ── Mapper ────────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ namespace EAIOS.Api.Controllers.V1;
 /// </summary>
 [Route("api/v1/admin")]
 [Authorize(Roles = "platform.admin,Admin")]
-public sealed class AdminController(PlatformDbContext platformDb) : V1ApiController
+public sealed class AdminController(IPlatformAdminService adminService) : V1ApiController
 {
     // ── GET /api/v1/admin/tenants ─────────────────────────────────────────────
     [HttpGet("tenants")]
@@ -26,65 +26,92 @@ public sealed class AdminController(PlatformDbContext platformDb) : V1ApiControl
         [FromQuery] string? q       = null,
         CancellationToken  ct       = default)
     {
-        var query = platformDb.Organizations.AsQueryable();
-
-        if (!string.IsNullOrWhiteSpace(q))
-            query = query.Where(o => o.Name.Contains(q) || o.Slug.Contains(q));
-
-        var total = await query.CountAsync(ct);
-        var orgs  = await query
-            .OrderByDescending(o => o.CreatedAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
-
-        var dtos = orgs.Select(o => new TenantSummaryDto(
-            o.Id, o.Name, o.Slug, o.Status.ToString(), o.PlanId,
-            o.CurrentUsers, o.MaxUsers,
-            o.StorageUsedBytes, o.StorageQuotaBytes,
-            o.CreatedAt, o.TrialEndsAt)).ToList();
-
-        return Ok(ApiResponse.List(dtos, total, page, pageSize));
+        var result = await adminService.ListTenantsAsync(page, pageSize, q, ct);
+        return Ok(ApiResponse.List(result.Items, result.TotalCount, page, pageSize));
     }
 
     // ── GET /api/v1/admin/tenants/{id} ────────────────────────────────────────
     [HttpGet("tenants/{id:guid}")]
     public async Task<IActionResult> GetTenant(Guid id, CancellationToken ct)
     {
-        var org = await platformDb.Organizations.FindAsync([id], ct);
-        if (org == null) return NotFound();
+        try
+        {
+            var dto = await adminService.GetTenantAsync(id, ct);
+            return Ok200(dto);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
 
-        return Ok200(new TenantSummaryDto(
-            org.Id, org.Name, org.Slug, org.Status.ToString(), org.PlanId,
-            org.CurrentUsers, org.MaxUsers,
-            org.StorageUsedBytes, org.StorageQuotaBytes,
-            org.CreatedAt, org.TrialEndsAt));
+    [HttpPost("tenants")]
+    public async Task<IActionResult> CreateTenant([FromBody] CreateTenantRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var dto = await adminService.CreateTenantAsync(req, ActorId.Value, ct);
+        return Created201("GetTenant", new { id = dto.Id }, dto);
     }
 
     // ── POST /api/v1/admin/tenants/{id}/suspend ───────────────────────────────
     [HttpPost("tenants/{id:guid}/suspend")]
     public async Task<IActionResult> SuspendTenant(Guid id, [FromBody] SuspendTenantRequest req, CancellationToken ct)
     {
-        var org = await platformDb.Organizations.FindAsync([id], ct);
-        if (org == null) return NotFound();
-
-        org.Status = Domain.Organization.OrganizationStatus.Suspended;
-        await platformDb.SaveChangesAsync(ct);
-
-        return Ok200(new { org.Id, org.Status, Reason = req.Reason });
+        if (!ActorId.HasValue) return Unauthorized();
+        try
+        {
+            var dto = await adminService.SuspendTenantAsync(id, req.Reason, ActorId.Value, ct);
+            return Ok200(new { dto.Id, dto.Status, Reason = req.Reason });
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── POST /api/v1/admin/tenants/{id}/reactivate ────────────────────────────
     [HttpPost("tenants/{id:guid}/reactivate")]
     public async Task<IActionResult> ReactivateTenant(Guid id, CancellationToken ct)
     {
-        var org = await platformDb.Organizations.FindAsync([id], ct);
-        if (org == null) return NotFound();
+        if (!ActorId.HasValue) return Unauthorized();
+        try
+        {
+            var dto = await adminService.ReactivateTenantAsync(id, ActorId.Value, ct);
+            return Ok200(new { dto.Id, dto.Status });
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
 
-        org.Status = Domain.Organization.OrganizationStatus.Active;
-        await platformDb.SaveChangesAsync(ct);
+    [HttpGet("tenants/{id:guid}/stats")]
+    public async Task<IActionResult> GetTenantStats(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            var stats = await adminService.GetTenantStatsAsync(id, ct);
+            return Ok200(stats);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
 
-        return Ok200(new { org.Id, org.Status });
+    [HttpPut("tenants/{id:guid}/license")]
+    public async Task<IActionResult> UpdateTenantLicense(Guid id, [FromBody] UpdateLicenseRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        try
+        {
+            var dto = await adminService.UpdateTenantLicenseAsync(id, req, ActorId.Value, ct);
+            return Ok200(dto);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     // ── GET /api/v1/admin/audit-logs ─────────────────────────────────────────
@@ -97,30 +124,16 @@ public sealed class AdminController(PlatformDbContext platformDb) : V1ApiControl
         [FromQuery] int     pageSize       = 50,
         CancellationToken   ct             = default)
     {
-        var query = platformDb.AuditEvents.AsQueryable();
+        var result = await adminService.ListAuditLogsAsync(organizationId, action, actorId, page, pageSize, ct);
+        return Ok(ApiResponse.List(result.Items, result.TotalCount, page, pageSize));
+    }
 
-        if (organizationId.HasValue)
-            query = query.Where(e => e.OrganizationId == organizationId.Value);
-        if (!string.IsNullOrWhiteSpace(action))
-            query = query.Where(e => e.Action.Contains(action));
-        if (!string.IsNullOrWhiteSpace(actorId))
-            query = query.Where(e => e.ActorId.ToString() == actorId);
-
-        var total  = await query.CountAsync(ct);
-        var events = await query
-            .OrderByDescending(e => e.OccurredAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
-
-        var dtos = events.Select(e => new AuditEventDto(
-            e.Id, e.OrganizationId, e.OccurredAt,
-            e.ActorId, e.ActorType, e.ActorEmail, e.ActorIp,
-            e.Action, e.Module, e.Result, e.FailureReason,
-            e.ResourceId, e.ResourceType, e.ResourceName,
-            e.CorrelationId)).ToList();
-
-        return Ok(ApiResponse.List(dtos, total, page, pageSize));
+    [HttpPost("audit-logs/export")]
+    public async Task<IActionResult> ExportAuditLogs(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        var jobId = await adminService.ExportAuditLogsAsync(ActorId.Value, ct);
+        return Accepted(new { JobId = jobId, StatusUrl = $"/api/v1/admin/exports/{jobId}/status" });
     }
 
     // ── POST /api/v1/admin/seed ───────────────────────────────────────────────
@@ -140,28 +153,38 @@ public sealed class AdminController(PlatformDbContext platformDb) : V1ApiControl
         [FromQuery] Guid? organizationId,
         CancellationToken ct)
     {
-        var query = platformDb.FeatureFlags.AsQueryable();
-
-        var flags = await query.OrderBy(f => f.Key).ToListAsync(ct);
-        return Ok200(flags.Select(f => new
-        {
-            f.Id, f.Key, f.Description, f.Type, f.DefaultValue, f.Module, f.IsActive, f.CreatedAt
-        }).ToList());
+        var flags = await adminService.ListFeatureFlagsAsync(organizationId, ct);
+        return Ok200(flags);
     }
 
     // ── PUT /api/v1/admin/feature-flags/{id} ─────────────────────────────────
     [HttpPut("feature-flags/{id:guid}")]
     public async Task<IActionResult> UpdateFeatureFlag(Guid id, [FromBody] UpdateFeatureFlagRequest req, CancellationToken ct)
     {
-        var flag = await platformDb.FeatureFlags.FindAsync([id], ct);
-        if (flag == null) return NotFound();
+        if (!ActorId.HasValue) return Unauthorized();
+        try
+        {
+            var flag = await adminService.UpdateFeatureFlagAsync(id, req, ActorId.Value, ct);
+            return Ok200(flag);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
 
-        if (req.IsActive.HasValue) flag.IsActive = req.IsActive.Value;
-        if (req.DefaultValue.HasValue) flag.DefaultValue = req.DefaultValue.Value;
-        if (req.Description != null) flag.Description = req.Description;
+    [HttpGet("health")]
+    public async Task<IActionResult> GetHealth(CancellationToken ct)
+    {
+        var status = await adminService.GetHealthStatusAsync(ct);
+        return Ok200(status);
+    }
 
-        await platformDb.SaveChangesAsync(ct);
-        return Ok200(new { flag.Id, flag.Key, flag.IsActive });
+    [HttpGet("metrics")]
+    public async Task<IActionResult> GetMetrics(CancellationToken ct)
+    {
+        var metrics = await adminService.GetMetricsAsync(ct);
+        return Ok200(metrics);
     }
 }
 

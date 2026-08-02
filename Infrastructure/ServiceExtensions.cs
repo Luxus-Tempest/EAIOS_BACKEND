@@ -72,13 +72,37 @@ public static class ServiceExtensions
         services.AddSingleton<IApiKeyService,   ApiKeyService>();
         services.AddScoped<IPermissionService,  PermissionService>();
 
+        services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider, PermissionPolicyProvider>();
+        services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, PermissionAuthorizationHandler>();
+
         // ── Storage & AI ────────────────────────────────────────────────────
         services.AddScoped<IStorageService, LocalStorageService>();
         services.AddScoped<ILlmService,     StubLlmService>();
 
-        // ── Domain Services ─────────────────────────────────────────────────
+        // ── Domain & Application Services ───────────────────────────────────
         services.AddScoped<IAuditService,         AuditService>();
         services.AddScoped<INotificationService,  InMemoryNotificationService>();
+        services.AddScoped<EAIOS.Api.Application.Identity.IUserService, EAIOS.Api.Application.Identity.UserService>();
+        services.AddScoped<EAIOS.Api.Application.Organization.IWorkspaceService, EAIOS.Api.Application.Organization.WorkspaceService>();
+        services.AddScoped<EAIOS.Api.Application.Organization.IDepartmentService, EAIOS.Api.Application.Organization.DepartmentService>();
+        services.AddScoped<EAIOS.Api.Application.AccessControl.IAccessControlService, EAIOS.Api.Application.AccessControl.AccessControlService>();
+        services.AddScoped<EAIOS.Api.Application.Resource.IDocumentService, EAIOS.Api.Application.Resource.DocumentService>();
+        services.AddScoped<EAIOS.Api.Application.Resource.IFolderService, EAIOS.Api.Application.Resource.FolderService>();
+        services.AddScoped<EAIOS.Api.Application.Knowledge.IKnowledgeService, EAIOS.Api.Application.Knowledge.KnowledgeService>();
+        services.AddScoped<EAIOS.Api.Application.Knowledge.IKnowledgeGraphService, EAIOS.Api.Application.Knowledge.KnowledgeGraphService>();
+        services.AddScoped<EAIOS.Api.Application.Agent.IAgentService, EAIOS.Api.Application.Agent.AgentService>();
+        services.AddScoped<EAIOS.Api.Application.Agent.IAgentExecutionService, EAIOS.Api.Application.Agent.AgentExecutionService>();
+        services.AddScoped<EAIOS.Api.Application.Workflow.IWorkflowService, EAIOS.Api.Application.Workflow.WorkflowService>();
+        services.AddScoped<EAIOS.Api.Application.Search.ISearchService, EAIOS.Api.Application.Search.SearchService>();
+        services.AddScoped<EAIOS.Api.Application.Connector.IConnectorService, EAIOS.Api.Application.Connector.ConnectorService>();
+        services.AddScoped<EAIOS.Api.Application.Connector.IConnectorCatalogService, EAIOS.Api.Application.Connector.ConnectorCatalogService>();
+        services.AddScoped<EAIOS.Api.Application.Notification.INotificationService, EAIOS.Api.Application.Notification.NotificationService>();
+        services.AddScoped<EAIOS.Api.Application.Notification.INotificationTemplateService, EAIOS.Api.Application.Notification.NotificationTemplateService>();
+        services.AddScoped<EAIOS.Api.Application.Analytics.IAnalyticsQueryService, EAIOS.Api.Application.Analytics.AnalyticsQueryService>();
+        services.AddScoped<EAIOS.Api.Application.Platform.IPlatformAdminService, EAIOS.Api.Application.Platform.PlatformAdminService>();
+        services.AddScoped<EAIOS.Api.Application.Webhook.IWebhookService, EAIOS.Api.Application.Webhook.WebhookService>();
+        
+        services.AddSingleton<EAIOS.Api.Application.Realtime.IRealtimeEventService, EAIOS.Api.Application.Realtime.RealtimeEventService>();
 
         // ── Identity Repositories ───────────────────────────────────────────
         services.AddScoped<IUserRepository,        UserRepository>();
@@ -124,9 +148,15 @@ public static class ServiceExtensions
         // ── Misc Repositories ───────────────────────────────────────────────
         services.AddScoped<ISavedSearchRepository,      SavedSearchRepository>();
         services.AddScoped<INotificationRepository,     NotificationRepository>();
+        services.AddScoped<INotificationTemplateRepository, NotificationTemplateRepository>();
         services.AddScoped<IAnalyticsEventRepository,   AnalyticsEventRepository>();
         services.AddScoped<IConnectorInstanceRepository, ConnectorInstanceRepository>();
+        services.AddScoped<IConnectorDefinitionRepository, ConnectorDefinitionRepository>();
         services.AddScoped<ISyncJobRepository,           SyncJobRepository>();
+        services.AddScoped<IWebhookSubscriptionRepository, WebhookSubscriptionRepository>();
+
+        // ── HTTP Clients ────────────────────────────────────────────────────
+        services.AddHttpClient("WebhookClient");
 
         return services;
     }

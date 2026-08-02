@@ -10,6 +10,8 @@ using EAIOS.Api.Domain.Workflow;
 using EAIOS.Api.Domain.Search;
 using EAIOS.Api.Domain.Analytics;
 using EAIOS.Api.Domain.Notification;
+using EAIOS.Api.Domain.Webhook;
+using EAIOS.Api.Domain.Connector;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
 
@@ -91,6 +93,14 @@ public sealed class EaiosDbContext : DbContext
     public DbSet<Domain.Notification.Notification> Notifications       => Set<Domain.Notification.Notification>();
     public DbSet<NotificationTemplate>             NotificationTemplates => Set<NotificationTemplate>();
 
+    // ── Webhooks ────────────────────────────
+    public DbSet<WebhookSubscription> WebhookSubscriptions => Set<WebhookSubscription>();
+
+    // ── Connector ───────────────────────────
+    public DbSet<ConnectorDefinition> ConnectorDefinitions => Set<ConnectorDefinition>();
+    public DbSet<ConnectorInstance> ConnectorInstances => Set<ConnectorInstance>();
+    public DbSet<SyncJob> SyncJobs => Set<SyncJob>();
+
     // ═══════════════════════════════════════════════════════════════════════════
     // MODEL CREATION
     // ═══════════════════════════════════════════════════════════════════════════
@@ -126,6 +136,9 @@ public sealed class EaiosDbContext : DbContext
             var lambda      = System.Linq.Expressions.Expression.Lambda(combined, parameter);
 
             modelBuilder.Entity(clrType).HasQueryFilter(lambda);
+
+            // Concurrency Token
+            modelBuilder.Entity(clrType).Property(nameof(TenantEntity.Version)).IsRowVersion();
         }
     }
 
