@@ -194,3 +194,34 @@ public sealed class SyncJobRepository(EaiosDbContext db) : RepositoryBase<SyncJo
     public async Task<IReadOnlyList<SyncJob>> GetDueAsync(CancellationToken ct = default) =>
         await Set.Where(j => j.Status == SyncJobStatus.Active && j.NextRunAt <= DateTime.UtcNow).ToListAsync(ct);
 }
+
+// ── IReportJobRepository ─────────────────────────────────────────────────────
+
+public interface IReportJobRepository
+{
+    Task<ReportJob?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<PagedResult<ReportJob>> GetByRequesterAsync(Guid requestedBy, int page, int pageSize, CancellationToken ct = default);
+    Task<IReadOnlyList<ReportJob>> GetQueuedAsync(int batchSize, CancellationToken ct = default);
+    Task AddAsync(ReportJob job, CancellationToken ct = default);
+    void Update(ReportJob job);
+    void SoftDelete(ReportJob job);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class ReportJobRepository(EaiosDbContext db) : RepositoryBase<ReportJob>(db), IReportJobRepository
+{
+    public async Task<PagedResult<ReportJob>> GetByRequesterAsync(Guid requestedBy, int page, int pageSize, CancellationToken ct = default)
+    {
+        var q     = Set.Where(r => r.RequestedBy == requestedBy);
+        var total = await q.CountAsync(ct);
+        var items = await q.OrderByDescending(r => r.CreatedAt)
+                           .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+        return new PagedResult<ReportJob>(items, page, pageSize, total);
+    }
+
+    public async Task<IReadOnlyList<ReportJob>> GetQueuedAsync(int batchSize, CancellationToken ct = default) =>
+        await Set.Where(r => r.Status == ReportJobStatus.Queued)
+                 .OrderBy(r => r.CreatedAt)
+                 .Take(batchSize)
+                 .ToListAsync(ct);
+}

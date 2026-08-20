@@ -1,4 +1,5 @@
 using EAIOS.Api.Application.Analytics;
+using EAIOS.Api.Infrastructure.BackgroundJobs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -6,37 +7,88 @@ namespace EAIOS.Api.Controllers.V1;
 
 /// <summary>
 /// Rapports asynchrones et exports.
+/// La demande crée un job persistant, traité hors requête par <see cref="ReportGenerationWorker"/> ;
+/// le client scrute ensuite le statut puis télécharge le fichier généré.
 /// Route : /api/v1/analytics/reports
 /// </summary>
 [Route("api/v1/analytics/reports")]
 [Authorize]
-public sealed class ReportsController : V1ApiController
+public sealed class ReportsController(
+    IReportService reports,
+    ReportQueueSignal queueSignal) : V1ApiController
 {
+    // ── POST /api/v1/analytics/reports ────────────────────────────────────────
     [HttpPost]
     public async Task<IActionResult> GenerateReport([FromBody] GenerateReportRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        
-        // Stub : en production, publier un message dans une file d'attente
-        var reportId = Guid.CreateVersion7().ToString("N");
-        return Accepted(new ReportJobResult(reportId, $"/api/v1/analytics/reports/{reportId}/status"));
+
+        try
+        {
+            var job = await reports.RequestAsync(TenantId, req, ActorId.Value, ct);
+
+            // Réveille immédiatement le worker plutôt que d'attendre le prochain scrutin.
+            queueSignal.Notify();
+
+            return Accepted(
+                $"/api/v1/analytics/reports/{job.Id}/status",
+                Application.Common.Models.ApiResponse.Wrap(ReportService.Map(job)));
+        }
+        catch (ArgumentException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
     }
 
-    [HttpGet("{id}/status")]
-    public async Task<IActionResult> GetReportStatus(string id, CancellationToken ct)
+    // ── GET /api/v1/analytics/reports ─────────────────────────────────────────
+    [HttpGet]
+    public async Task<IActionResult> ListReports(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        
-        // Stub
-        return Ok200(new { Status = "Completed", DownloadUrl = $"/api/v1/analytics/reports/{id}/download" });
+
+        var result = await reports.ListAsync(ActorId.Value, page, pageSize, ct);
+        return OkList(result.Items.Select(ReportService.Map).ToList(), result.TotalCount, result.Page, result.PageSize);
     }
 
-    [HttpGet("{id}/download")]
-    public async Task<IActionResult> DownloadReport(string id, CancellationToken ct)
+    // ── GET /api/v1/analytics/reports/{id}/status ─────────────────────────────
+    [HttpGet("{id:guid}/status")]
+    public async Task<IActionResult> GetReportStatus(Guid id, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        
-        // Stub : en production, vérifier l'URL signée et retourner le fichier
-        return Ok200(new { Message = "Fichier rapport simulé." });
+
+        try
+        {
+            var job = await reports.GetAsync(id, ActorId.Value, ct);
+            return Ok200(ReportService.Map(job));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Rapport introuvable.");
+        }
+    }
+
+    // ── GET /api/v1/analytics/reports/{id}/download ───────────────────────────
+    [HttpGet("{id:guid}/download")]
+    public async Task<IActionResult> DownloadReport(Guid id, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            var download = await reports.DownloadAsync(id, ActorId.Value, ct);
+            return File(download.Content, download.ContentType, download.FileName);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Rapport introuvable.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Encore en cours, échoué, ou expiré : l'état est décrit dans le message.
+            return Conflict(ex.Message);
+        }
     }
 }

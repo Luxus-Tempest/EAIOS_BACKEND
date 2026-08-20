@@ -87,3 +87,48 @@ public sealed class KnowledgePackRepository(EaiosDbContext db) : RepositoryBase<
         await Set.Where(p => p.IsPublic && p.Status == KnowledgePackStatus.Published)
                  .OrderBy(p => p.Name).ToListAsync(ct);
 }
+
+// ── IKnowledgeRelationRepository ─────────────────────────────────────────────
+
+public interface IKnowledgeRelationRepository
+{
+    Task<KnowledgeRelation?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<KnowledgeRelation>> GetByItemAsync(Guid itemId, bool includeIncoming = true, CancellationToken ct = default);
+    Task<IReadOnlyList<KnowledgeRelation>> GetOutgoingAsync(Guid sourceItemId, CancellationToken ct = default);
+    Task<IReadOnlyList<KnowledgeRelation>> GetByItemsAsync(IReadOnlyCollection<Guid> itemIds, CancellationToken ct = default);
+    Task<bool> ExistsBetweenAsync(Guid sourceId, Guid targetId, string relationType, CancellationToken ct = default);
+    Task AddAsync(KnowledgeRelation relation, CancellationToken ct = default);
+    void Update(KnowledgeRelation relation);
+    void SoftDelete(KnowledgeRelation relation);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class KnowledgeRelationRepository(EaiosDbContext db)
+    : RepositoryBase<KnowledgeRelation>(db), IKnowledgeRelationRepository
+{
+    public async Task<IReadOnlyList<KnowledgeRelation>> GetByItemAsync(
+        Guid itemId, bool includeIncoming = true, CancellationToken ct = default) =>
+        await Set.Where(r => r.SourceItemId == itemId || (includeIncoming && r.TargetItemId == itemId))
+                 .OrderBy(r => r.RelationType)
+                 .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<KnowledgeRelation>> GetOutgoingAsync(
+        Guid sourceItemId, CancellationToken ct = default) =>
+        await Set.Where(r => r.SourceItemId == sourceItemId)
+                 .OrderBy(r => r.RelationType)
+                 .ToListAsync(ct);
+
+    /// <summary>Charge en une requête toutes les arêtes touchant un lot de noeuds — utilisé par la traversée du graphe.</summary>
+    public async Task<IReadOnlyList<KnowledgeRelation>> GetByItemsAsync(
+        IReadOnlyCollection<Guid> itemIds, CancellationToken ct = default)
+    {
+        if (itemIds.Count == 0) return [];
+        return await Set.Where(r => itemIds.Contains(r.SourceItemId) || itemIds.Contains(r.TargetItemId))
+                        .ToListAsync(ct);
+    }
+
+    public async Task<bool> ExistsBetweenAsync(Guid sourceId, Guid targetId, string relationType, CancellationToken ct = default) =>
+        await Set.AnyAsync(r => r.SourceItemId == sourceId
+                             && r.TargetItemId == targetId
+                             && r.RelationType == relationType, ct);
+}

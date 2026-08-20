@@ -173,6 +173,10 @@ public sealed class User : TenantEntity
     }
 
     public void SetAvatarUrl(string url) => AvatarUrl = url;
+    public void ClearAvatar() => AvatarUrl = null;
+
+    /// <summary>Preferences de notification serialisees en JSON.</summary>
+    public void SetNotificationPreferences(string json) => NotificationPreferences = json;
     public string FullName => $"{FirstName} {LastName}".Trim();
 }
 

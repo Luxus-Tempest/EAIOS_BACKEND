@@ -3,3 +3,6 @@ bin/
 obj/
 *.user
 appsettings.Local.json
+
+# Fichiers deposes en stockage local (dev)
+uploads/

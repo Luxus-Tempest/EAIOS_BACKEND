@@ -10,6 +10,8 @@ namespace EAIOS.Api.Application.Webhook;
 public sealed class WebhookService(
     IWebhookSubscriptionRepository webhookRepo,
     IHttpClientFactory httpClientFactory,
+    EAIOS.Api.Infrastructure.BackgroundJobs.WebhookDeliveryQueue deliveryQueue,
+    ILogger<WebhookService> logger,
     IDataProtectionProvider dataProtectionProvider) : IWebhookService
 {
     private IDataProtector Protector => dataProtectionProvider.CreateProtector("WebhookSecrets");
@@ -144,49 +146,36 @@ public sealed class WebhookService(
 
         if (!interestedSubs.Any()) return;
 
-        // Fire-and-forget: dispatch asynchrone réel
-        // Dans une vraie prod, on publierait dans Kafka, RabbitMQ ou Hangfire
-        // Ici on simule une background task (dead-letter queue / retries sont gérés par le background job en prod)
-        _ = Task.Run(async () =>
+        var eventId = Guid.CreateVersion7();
+        var payloadJson = JsonSerializer.Serialize(new
         {
-            using var httpClient = httpClientFactory.CreateClient("WebhookClient");
-            httpClient.Timeout = TimeSpan.FromSeconds(10);
-            
-            var evt = new
-            {
-                EventId = Guid.CreateVersion7(),
-                EventType = eventType,
-                Timestamp = DateTime.UtcNow,
-                Data = payload
-            };
-            var contentString = JsonSerializer.Serialize(evt);
-
-            foreach (var sub in interestedSubs)
-            {
-                try
-                {
-                    var request = new HttpRequestMessage(HttpMethod.Post, sub.Url)
-                    {
-                        Content = new StringContent(contentString, System.Text.Encoding.UTF8, "application/json")
-                    };
-                    
-                    if (!string.IsNullOrEmpty(sub.Secret))
-                    {
-                        var rawSecret = Protector.Unprotect(sub.Secret);
-                        using var hmac = new HMACSHA256(System.Text.Encoding.UTF8.GetBytes(rawSecret));
-                        var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(contentString));
-                        request.Headers.Add("X-Eaios-Signature", $"sha256={Convert.ToHexString(hash).ToLowerInvariant()}");
-                    }
-                    
-                    var response = await httpClient.SendAsync(request);
-                    // Mettre à jour LastTriggeredAt etc (via DbContext dans un scope)
-                }
-                catch
-                {
-                    // Log error, retry policy, dead letter queue
-                }
-            }
+            EventId   = eventId,
+            EventType = eventType,
+            Timestamp = DateTime.UtcNow,
+            Data      = payload
         });
+
+        // La livraison est confiee au worker de fond : il dispose de son propre
+        // scope DI, applique des reessais a backoff exponentiel et persiste le
+        // resultat sur l'abonnement.
+        foreach (var sub in interestedSubs)
+        {
+            var queued = deliveryQueue.TryEnqueue(new EAIOS.Api.Infrastructure.BackgroundJobs.WebhookDelivery(
+                TenantId:        tenantId,
+                SubscriptionId:  sub.Id,
+                Url:             sub.Url,
+                ProtectedSecret: sub.Secret,
+                EventType:       eventType,
+                PayloadJson:     payloadJson,
+                EventId:         eventId));
+
+            if (!queued)
+                logger.LogWarning(
+                    "File de livraison des webhooks saturee : evenement {EventType} abandonne pour l'abonnement {SubscriptionId}.",
+                    eventType, sub.Id);
+        }
+
+        await Task.CompletedTask;
     }
 
     private async Task<WebhookSubscription> GetOwnedAsync(Guid id, Guid tenantId, CancellationToken ct)

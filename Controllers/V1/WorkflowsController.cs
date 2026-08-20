@@ -69,7 +69,12 @@ public sealed class WorkflowsController(
         }
         catch (KeyNotFoundException)
         {
-            return NotFound();
+            return NotFound("Definition introuvable.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Graphe invalide : c'est un refus metier attendu, pas une panne.
+            return UnprocessableEntity(ex.Message);
         }
     }
 
@@ -83,7 +88,12 @@ public sealed class WorkflowsController(
         }
         catch (KeyNotFoundException)
         {
-            return NotFound();
+            return NotFound("Definition introuvable.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Instances encore en cours : suppression refusee.
+            return Conflict(ex.Message);
         }
     }
 

@@ -80,6 +80,44 @@ public sealed class NotificationsController(
         }
     }
 
+    // ── Preferences ───────────────────────────────────────────────────────────
+
+    /// <summary>Preferences de notification de l'utilisateur courant.</summary>
+    [HttpGet("preferences")]
+    public async Task<IActionResult> GetPreferences(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            return Ok200(await notifService.GetPreferencesAsync(ActorId.Value, ct));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Utilisateur introuvable.");
+        }
+    }
+
+    /// <summary>Mise a jour partielle : seuls les champs fournis sont modifies.</summary>
+    [HttpPut("preferences")]
+    public async Task<IActionResult> UpdatePreferences([FromBody] UpdatePreferencesRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            return Ok200(await notifService.UpdatePreferencesAsync(ActorId.Value, req, ct));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Utilisateur introuvable.");
+        }
+        catch (ArgumentException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
+    }
+
     // ── Mapper ────────────────────────────────────────────────────────────────
     private static object MapNotif(Domain.Notification.Notification n) => new
     {

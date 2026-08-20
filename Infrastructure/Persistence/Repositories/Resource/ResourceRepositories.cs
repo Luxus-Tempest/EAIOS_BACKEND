@@ -175,3 +175,60 @@ public sealed class LegalHoldRepository(EaiosDbContext db) : RepositoryBase<Lega
     public async Task<IReadOnlyList<LegalHold>> GetActiveByDocumentAsync(Guid documentId, CancellationToken ct = default) =>
         await Set.Where(h => h.DocumentId == documentId && h.Status == LegalHoldStatus.Active).ToListAsync(ct);
 }
+
+// ── IMetadataValueRepository ─────────────────────────────────────────────────
+
+public interface IMetadataValueRepository
+{
+    Task<IReadOnlyList<MetadataValue>> GetByResourceAsync(Guid resourceId, CancellationToken ct = default);
+    Task<MetadataValue?> FindAsync(Guid resourceId, string fieldKey, CancellationToken ct = default);
+    Task AddAsync(MetadataValue value, CancellationToken ct = default);
+    void Update(MetadataValue value);
+    void SoftDelete(MetadataValue value);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class MetadataValueRepository(EaiosDbContext db)
+    : RepositoryBase<MetadataValue>(db), IMetadataValueRepository
+{
+    public async Task<IReadOnlyList<MetadataValue>> GetByResourceAsync(Guid resourceId, CancellationToken ct = default) =>
+        await Set.Where(m => m.ResourceId == resourceId)
+                 .OrderBy(m => m.FieldKey)
+                 .ToListAsync(ct);
+
+    public async Task<MetadataValue?> FindAsync(Guid resourceId, string fieldKey, CancellationToken ct = default) =>
+        await Set.FirstOrDefaultAsync(m => m.ResourceId == resourceId && m.FieldKey == fieldKey, ct);
+}
+
+// ── IMetadataTemplateRepository ──────────────────────────────────────────────
+
+public interface IMetadataTemplateRepository
+{
+    Task<MetadataTemplate?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<MetadataTemplate>> GetAllAsync(bool activeOnly = true, CancellationToken ct = default);
+    Task<IReadOnlyList<MetadataTemplate>> GetForResourceTypeAsync(string resourceType, CancellationToken ct = default);
+    Task AddAsync(MetadataTemplate template, CancellationToken ct = default);
+    void Update(MetadataTemplate template);
+    void SoftDelete(MetadataTemplate template);
+    Task<int> SaveAsync(CancellationToken ct = default);
+}
+
+public sealed class MetadataTemplateRepository(EaiosDbContext db)
+    : RepositoryBase<MetadataTemplate>(db), IMetadataTemplateRepository
+{
+    public async Task<IReadOnlyList<MetadataTemplate>> GetAllAsync(bool activeOnly = true, CancellationToken ct = default)
+    {
+        var q = Set.AsQueryable();
+        if (activeOnly) q = q.Where(t => t.IsActive);
+        return await q.OrderBy(t => t.Name).ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<MetadataTemplate>> GetForResourceTypeAsync(string resourceType, CancellationToken ct = default)
+    {
+        // Un modèle sans type applicable déclaré vaut pour tous les types de ressource.
+        var all = await Set.Where(t => t.IsActive).OrderBy(t => t.Name).ToListAsync(ct);
+        return all.Where(t => t.ApplicableResourceTypes.Length == 0
+                           || t.ApplicableResourceTypes.Contains(resourceType, StringComparer.OrdinalIgnoreCase))
+                  .ToList();
+    }
+}

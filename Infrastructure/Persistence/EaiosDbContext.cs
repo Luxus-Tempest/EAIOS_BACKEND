@@ -88,6 +88,7 @@ public sealed class EaiosDbContext : DbContext
 
     // ── Analytics ─────────────────────────────────────────────────────────────
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
+    public DbSet<ReportJob>      ReportJobs      => Set<ReportJob>();
 
     // ── Notification ──────────────────────────────────────────────────────────
     public DbSet<Domain.Notification.Notification> Notifications       => Set<Domain.Notification.Notification>();
@@ -101,9 +102,33 @@ public sealed class EaiosDbContext : DbContext
     public DbSet<ConnectorInstance> ConnectorInstances => Set<ConnectorInstance>();
     public DbSet<SyncJob> SyncJobs => Set<SyncJob>();
 
+    /// <summary>
+    /// Tenant courant, lu à chaque exécution de requête par les Global Query Filters.
+    ///
+    /// Le filtre DOIT passer par cette propriété d'instance du DbContext : EF Core met
+    /// le modèle en cache pour toute la durée de vie de l'application, donc capturer
+    /// directement l'<see cref="ITenantContext"/> dans l'expression figerait le tenant
+    /// de la toute première requête et le réappliquerait à toutes les suivantes —
+    /// une fuite de données entre organisations.
+    /// </summary>
+    public Guid CurrentTenantId => _tenantContext.IsResolved ? _tenantContext.OrganizationId : Guid.Empty;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // MODEL CREATION
     // ═══════════════════════════════════════════════════════════════════════════
+
+    private static readonly MethodInfo TenantFilterMethod =
+        typeof(EaiosDbContext).GetMethod(nameof(ApplyTenantFilter),
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    /// <summary>
+    /// Pose le filtre tenant + soft-delete sur une entité. Écrit sous forme de vraie
+    /// lambda C# pour que l'accès à <see cref="CurrentTenantId"/> soit reconnu par EF
+    /// comme un membre du DbContext et ré-évalué à chaque requête.
+    /// </summary>
+    private void ApplyTenantFilter<TEntity>(ModelBuilder modelBuilder) where TEntity : TenantEntity =>
+        modelBuilder.Entity<TEntity>()
+                    .HasQueryFilter(e => !e.IsDeleted && e.OrganizationId == CurrentTenantId);
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -120,22 +145,7 @@ public sealed class EaiosDbContext : DbContext
             if (clrType.IsAbstract || !typeof(TenantEntity).IsAssignableFrom(clrType))
                 continue;
 
-            var parameter = System.Linq.Expressions.Expression.Parameter(clrType, "e");
-            var isDeletedProp = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.IsDeleted));
-            var orgIdProp     = System.Linq.Expressions.Expression.Property(parameter, nameof(TenantEntity.OrganizationId));
-
-            // Capture the context via closure so the filter is evaluated per-request
-            var ctx = _tenantContext;
-            var orgIdValue = System.Linq.Expressions.Expression.Property(
-                System.Linq.Expressions.Expression.Constant(ctx),
-                nameof(ITenantContext.OrganizationId));
-
-            var notDeleted  = System.Linq.Expressions.Expression.Not(isDeletedProp);
-            var tenantMatch = System.Linq.Expressions.Expression.Equal(orgIdProp, orgIdValue);
-            var combined    = System.Linq.Expressions.Expression.AndAlso(notDeleted, tenantMatch);
-            var lambda      = System.Linq.Expressions.Expression.Lambda(combined, parameter);
-
-            modelBuilder.Entity(clrType).HasQueryFilter(lambda);
+            TenantFilterMethod.MakeGenericMethod(clrType).Invoke(this, [modelBuilder]);
 
             // Concurrency Token
             modelBuilder.Entity(clrType).Property(nameof(TenantEntity.Version)).IsRowVersion();

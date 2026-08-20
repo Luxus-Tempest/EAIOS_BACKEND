@@ -10,6 +10,12 @@ public interface INotificationService
     Task MarkReadAsync(Guid id, Guid recipientId, CancellationToken ct = default);
     Task MarkAllReadAsync(Guid recipientId, CancellationToken ct = default);
     Task DeleteAsync(Guid id, Guid recipientId, CancellationToken ct = default);
+
+    /// <summary>Preferences de notification de l'utilisateur, valeurs par defaut si jamais definies.</summary>
+    Task<NotificationPreferencesDto> GetPreferencesAsync(Guid userId, CancellationToken ct = default);
+
+    /// <summary>Applique une mise a jour partielle : seuls les champs fournis sont modifies.</summary>
+    Task<NotificationPreferencesDto> UpdatePreferencesAsync(Guid userId, UpdatePreferencesRequest request, CancellationToken ct = default);
 }
 
 public interface INotificationTemplateService

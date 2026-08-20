@@ -44,10 +44,24 @@ public sealed class ConnectorsController(
     {
         if (!ActorId.HasValue) return Unauthorized();
 
-        var instance = await connectorService.CreateInstanceAsync(
-            TenantId, req.DefinitionId, req.Name, req.Description, req.WorkspaceId, ActorId.Value, ct);
+        try
+        {
+            // La configuration et les identifiants de la requete doivent etre persistes :
+            // sans eux, l'instance ne pourrait jamais se connecter au service distant.
+            var instance = await connectorService.CreateInstanceAsync(
+                TenantId, req.DefinitionId, req.Name, req.Description, req.WorkspaceId, ActorId.Value,
+                req.Configuration, req.Credentials, ct);
 
-        return Created201("GetConnectorInstance", new { id = instance.Id }, MapInstance(instance));
+            return Created201("GetConnectorInstance", new { id = instance.Id }, MapInstance(instance));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
     }
 
     // ── PUT /api/v1/connectors/instances/{id} ────────────────────────────────
@@ -59,7 +73,8 @@ public sealed class ConnectorsController(
     {
         try
         {
-            var instance = await connectorService.UpdateInstanceAsync(id, req.Name, req.Description, ct);
+            var instance = await connectorService.UpdateInstanceAsync(
+                id, req.Name, req.Description, req.Configuration, req.Credentials, ct);
             return Ok200(MapInstance(instance));
         }
         catch (KeyNotFoundException)

@@ -8,6 +8,8 @@ public sealed class KnowledgeService(
     IKnowledgeItemRepository itemRepo,
     IKnowledgeChunkRepository chunkRepo,
     IKnowledgePackRepository packRepo,
+    IVectorSearchService vectorSearch,
+    EAIOS.Api.Infrastructure.Analytics.IAnalyticsTracker analytics,
     ILlmService llm) : IKnowledgeService
 {
     public async Task<KnowledgeItem> CreateItemAsync(Guid tenantId, string title, KnowledgeItemType type, string? content, Guid? sourceDocumentId, Guid actorId, CancellationToken ct = default)
@@ -87,27 +89,76 @@ public sealed class KnowledgeService(
         await packRepo.SaveAsync(ct);
     }
 
+    /// <summary>
+    /// Question/reponse ancree (RAG). La recherche est d'abord semantique sur les
+    /// embeddings des chunks ; en l'absence de vecteurs (chunks pas encore traites
+    /// par le worker de vectorisation), on retombe sur la recherche lexicale afin
+    /// que la fonctionnalite reste utilisable des le premier contenu cree.
+    /// </summary>
     public async Task<AskResponse> AskAsync(string question, Guid? packId, CancellationToken ct = default)
     {
-        // Recherche sémantique dans la base de connaissance (simulée via SearchAsync pour l'instant)
-        var items = await itemRepo.SearchAsync(question, null, KnowledgeItemStatus.Published, packId, 1, 5, ct);
-        var context = string.Join("\n\n---\n\n", items.Items.Select(i => $"### {i.Title}\n{i.Content}"));
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        string context;
+        List<SourceRef> sources;
+        string retrievalMode;
+
+        var hits = await vectorSearch.SearchChunksAsync(question, topK: 6, minScore: 0.15f, packId: packId, ct: ct);
+
+        if (hits.Count > 0)
+        {
+            retrievalMode = "semantic";
+
+            context = string.Join("\n\n---\n\n",
+                hits.Select(h => $"### {h.ItemTitle} (pertinence {h.Score:0.00})\n{h.Content}"));
+
+            // Plusieurs chunks peuvent provenir du meme item : une seule source par item.
+            var itemIds = hits.Select(h => h.ItemId).Distinct().ToList();
+            sources = [];
+            foreach (var itemId in itemIds)
+            {
+                var item = await itemRepo.GetByIdAsync(itemId, ct);
+                if (item is not null) sources.Add(new SourceRef(item.Id, item.Title, item.Type));
+            }
+        }
+        else
+        {
+            retrievalMode = "lexical";
+
+            var items = await itemRepo.SearchAsync(question, null, KnowledgeItemStatus.Published, packId, 1, 5, ct);
+            context = string.Join("\n\n---\n\n", items.Items.Select(i => $"### {i.Title}\n{i.Content}"));
+            sources = items.Items.Select(i => new SourceRef(i.Id, i.Title, i.Type)).ToList();
+        }
 
         var systemPrompt = $"""
-            Tu es EAIOS, un assistant IA intelligent. Réponds en français à la question de l'utilisateur 
-            en te basant UNIQUEMENT sur le contexte fourni ci-dessous. 
-            Si la réponse n'est pas dans le contexte, dis-le clairement.
-            
+            Tu es EAIOS, un assistant IA intelligent. Reponds en francais a la question de l'utilisateur
+            en te basant UNIQUEMENT sur le contexte fourni ci-dessous.
+            Si la reponse n'est pas dans le contexte, dis-le clairement.
+
             CONTEXTE:
-            {(string.IsNullOrWhiteSpace(context) ? "Aucun document pertinent trouvé." : context)}
+            {(string.IsNullOrWhiteSpace(context) ? "Aucun document pertinent trouve." : context)}
             """;
 
         var result = await llm.GenerateAsync(systemPrompt, question, null, ct);
+        stopwatch.Stop();
+
+        await analytics.TrackAsync(
+            EAIOS.Api.Infrastructure.Analytics.AnalyticsEventTypes.KnowledgeAsked,
+            resourceType: "KnowledgeItem",
+            durationMs:   stopwatch.ElapsedMilliseconds,
+            properties: new
+            {
+                query       = question,
+                resultCount = sources.Count,
+                mode        = retrievalMode,
+                tokens      = result.TotalTokens
+            },
+            ct: ct);
 
         return new AskResponse(
-            Answer: result.Output,
-            Sources: items.Items.Select(i => new SourceRef(i.Id, i.Title, i.Type)).ToList(),
-            PromptTokens: result.PromptTokens,
+            Answer:           result.Output,
+            Sources:          sources,
+            PromptTokens:     result.PromptTokens,
             CompletionTokens: result.CompletionTokens);
     }
 

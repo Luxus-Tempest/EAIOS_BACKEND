@@ -1,11 +1,14 @@
 using EAIOS.Api.Domain.Notification;
 using EAIOS.Api.Application.Common.Models;
+using EAIOS.Api.Infrastructure.Persistence.Repositories.Identity;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Misc;
+using System.Text.Json;
 
 namespace EAIOS.Api.Application.Notification;
 
 public sealed class NotificationService(
-    INotificationRepository notifRepo) : INotificationService
+    INotificationRepository notifRepo,
+    IUserRepository userRepo) : INotificationService
 {
     public async Task<PagedResult<Domain.Notification.Notification>> ListAsync(Guid recipientId, bool? unreadOnly, int page, int pageSize, CancellationToken ct = default)
     {
@@ -40,6 +43,74 @@ public sealed class NotificationService(
 
         notifRepo.SoftDelete(notif);
         await notifRepo.SaveAsync(ct);
+    }
+
+    // ── Preferences ───────────────────────────────────────────────────────────
+    // Stockees en JSON sur User.NotificationPreferences : la colonne existait
+    // deja mais n'etait exposee par aucun endpoint.
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    /// <summary>Valeurs appliquees tant que l'utilisateur n'a rien personnalise.</summary>
+    private static NotificationPreferencesDto Defaults => new(
+        InAppEnabled:     true,
+        EmailEnabled:     true,
+        SmsEnabled:       false,
+        PushEnabled:      false,
+        DigestFrequency:  "daily",
+        ChannelOverrides: []);
+
+    public async Task<NotificationPreferencesDto> GetPreferencesAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await userRepo.GetByIdAsync(userId, ct)
+            ?? throw new KeyNotFoundException("Utilisateur introuvable.");
+
+        return Deserialize(user.NotificationPreferences);
+    }
+
+    public async Task<NotificationPreferencesDto> UpdatePreferencesAsync(
+        Guid userId, UpdatePreferencesRequest request, CancellationToken ct = default)
+    {
+        var user = await userRepo.GetByIdAsync(userId, ct)
+            ?? throw new KeyNotFoundException("Utilisateur introuvable.");
+
+        var current = Deserialize(user.NotificationPreferences);
+
+        var frequency = request.DigestFrequency?.Trim().ToLowerInvariant();
+        if (frequency is not null && frequency is not ("none" or "realtime" or "hourly" or "daily" or "weekly"))
+            throw new ArgumentException(
+                "Frequence de resume invalide. Valeurs acceptees : none, realtime, hourly, daily, weekly.");
+
+        // Mise a jour partielle : un champ absent conserve sa valeur actuelle.
+        var updated = new NotificationPreferencesDto(
+            InAppEnabled:     request.InAppEnabled     ?? current.InAppEnabled,
+            EmailEnabled:     request.EmailEnabled     ?? current.EmailEnabled,
+            SmsEnabled:       request.SmsEnabled       ?? current.SmsEnabled,
+            PushEnabled:      request.PushEnabled      ?? current.PushEnabled,
+            DigestFrequency:  frequency               ?? current.DigestFrequency,
+            ChannelOverrides: request.ChannelOverrides ?? current.ChannelOverrides);
+
+        user.SetNotificationPreferences(JsonSerializer.Serialize(updated));
+        userRepo.Update(user);
+        await userRepo.SaveAsync(ct);
+
+        return updated;
+    }
+
+    private static NotificationPreferencesDto Deserialize(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return Defaults;
+
+        try
+        {
+            return JsonSerializer.Deserialize<NotificationPreferencesDto>(json, JsonOptions) ?? Defaults;
+        }
+        catch (JsonException)
+        {
+            // Preferences corrompues : on repart des valeurs par defaut plutot
+            // que de bloquer l'acces aux notifications.
+            return Defaults;
+        }
     }
 }
 

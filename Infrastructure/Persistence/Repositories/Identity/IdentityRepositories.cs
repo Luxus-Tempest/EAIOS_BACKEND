@@ -23,11 +23,18 @@ public interface IUserRepository
 
 public sealed class UserRepository(EaiosDbContext db) : RepositoryBase<User>(db), IUserRepository
 {
+    /// <summary>
+    /// Recherche par email SANS filtre tenant : les endpoints d'authentification
+    /// (login, mot de passe oublie, verification email) sont anonymes, donc aucun
+    /// tenant n'est encore resolu. L'email est unique a l'echelle de la plateforme
+    /// et constitue lui-meme l'element d'identification.
+    /// </summary>
     public async Task<User?> FindByEmailAsync(string normalizedEmail, CancellationToken ct = default) =>
         await Set.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail && !u.IsDeleted, ct);
 
     public async Task<bool> EmailExistsAsync(string normalizedEmail, CancellationToken ct = default) =>
-        await Set.AnyAsync(u => u.NormalizedEmail == normalizedEmail, ct);
+        await Set.IgnoreQueryFilters()
+                 .AnyAsync(u => u.NormalizedEmail == normalizedEmail && !u.IsDeleted, ct);
 
     public async Task<PagedResult<User>> SearchAsync(string? query, UserStatus? status, int page, int pageSize, CancellationToken ct = default)
     {
@@ -60,8 +67,16 @@ public interface ISessionRepository
 
 public sealed class SessionRepository(EaiosDbContext db) : RepositoryBase<Session>(db), ISessionRepository
 {
+    /// <summary>
+    /// Resolution SANS filtre tenant : /auth/refresh est anonyme et ne porte aucun
+    /// contexte d'organisation. Le hash du refresh token est un secret unique qui
+    /// identifie a lui seul la session.
+    /// </summary>
     public async Task<Session?> FindByRefreshTokenHashAsync(string hash, CancellationToken ct = default) =>
-        await Set.FirstOrDefaultAsync(s => s.RefreshTokenHash == hash && s.Status == SessionStatus.Active, ct);
+        await Set.IgnoreQueryFilters()
+                 .FirstOrDefaultAsync(s => s.RefreshTokenHash == hash
+                                        && s.Status == SessionStatus.Active
+                                        && !s.IsDeleted, ct);
 
     public async Task<IReadOnlyList<Session>> GetActiveByUserAsync(Guid userId, CancellationToken ct = default) =>
         await Set.Where(s => s.UserId == userId && s.Status == SessionStatus.Active)
@@ -141,8 +156,13 @@ public interface IInvitationRepository
 
 public sealed class InvitationRepository(EaiosDbContext db) : RepositoryBase<Invitation>(db), IInvitationRepository
 {
+    /// <summary>
+    /// Resolution SANS filtre tenant : /auth/register est anonyme. Le jeton
+    /// d'invitation est unique et porte lui-meme l'organisation cible.
+    /// </summary>
     public async Task<Invitation?> FindByTokenAsync(string token, CancellationToken ct = default) =>
-        await Set.FirstOrDefaultAsync(i => i.Token == token, ct);
+        await Set.IgnoreQueryFilters()
+                 .FirstOrDefaultAsync(i => i.Token == token && !i.IsDeleted, ct);
 
     public async Task<Invitation?> FindPendingByEmailAsync(string normalizedEmail, CancellationToken ct = default) =>
         await Set.FirstOrDefaultAsync(i => i.NormalizedEmail == normalizedEmail && i.Status == InvitationStatus.Pending, ct);

@@ -51,3 +51,87 @@ public sealed class AnalyticsEvent : TenantEntity
         return evt;
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTITY: ReportJob — génération asynchrone de rapports/exports
+// Table: analytics.report_jobs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+public enum ReportJobStatus { Queued, Running, Completed, Failed, Expired }
+
+public sealed class ReportJob : TenantEntity
+{
+    public string ReportType { get; private set; } = string.Empty;   // dashboard, agents, workflows, search, audit, documents
+    public string Format { get; private set; } = "csv";              // csv, json
+    public ReportJobStatus Status { get; private set; }
+    public DateTime DateFrom { get; private set; }
+    public DateTime DateTo { get; private set; }
+    public string ParametersJson { get; private set; } = "{}";
+    public Guid RequestedBy { get; private set; }
+
+    public DateTime? StartedAt { get; private set; }
+    public DateTime? CompletedAt { get; private set; }
+    public string? FailureReason { get; private set; }
+
+    public string? StorageKey { get; private set; }
+    public string? FileName { get; private set; }
+    public string? ContentType { get; private set; }
+    public long FileSizeBytes { get; private set; }
+    public int RowCount { get; private set; }
+
+    /// <summary>Les rapports générés sont purgés après cette date pour ne pas accumuler de fichiers.</summary>
+    public DateTime ExpiresAt { get; private set; }
+
+    private ReportJob() { }
+
+    public static ReportJob Create(Guid organizationId, string reportType, string format,
+        DateTime dateFrom, DateTime dateTo, Guid requestedBy, string? parametersJson = null,
+        int retentionDays = 7)
+    {
+        var job = new ReportJob
+        {
+            Id             = Guid.CreateVersion7(),
+            ReportType     = reportType.Trim().ToLowerInvariant(),
+            Format         = string.IsNullOrWhiteSpace(format) ? "csv" : format.Trim().ToLowerInvariant(),
+            Status         = ReportJobStatus.Queued,
+            DateFrom       = dateFrom,
+            DateTo         = dateTo,
+            ParametersJson = parametersJson ?? "{}",
+            RequestedBy    = requestedBy,
+            ExpiresAt      = DateTime.UtcNow.AddDays(retentionDays)
+        };
+        job.SetOrganizationId(organizationId);
+        job.SetCreated(requestedBy);
+        return job;
+    }
+
+    public void MarkRunning()
+    {
+        Status    = ReportJobStatus.Running;
+        StartedAt = DateTime.UtcNow;
+    }
+
+    public void MarkCompleted(string storageKey, string fileName, string contentType, long sizeBytes, int rowCount)
+    {
+        Status        = ReportJobStatus.Completed;
+        CompletedAt   = DateTime.UtcNow;
+        StorageKey    = storageKey;
+        FileName      = fileName;
+        ContentType   = contentType;
+        FileSizeBytes = sizeBytes;
+        RowCount      = rowCount;
+        FailureReason = null;
+    }
+
+    public void MarkFailed(string reason)
+    {
+        Status        = ReportJobStatus.Failed;
+        CompletedAt   = DateTime.UtcNow;
+        FailureReason = reason.Length > 1000 ? reason[..1000] : reason;
+    }
+
+    public void MarkExpired() => Status = ReportJobStatus.Expired;
+
+    public bool IsDownloadable =>
+        Status == ReportJobStatus.Completed && StorageKey is not null && ExpiresAt > DateTime.UtcNow;
+}

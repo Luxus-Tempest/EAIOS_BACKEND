@@ -65,6 +65,37 @@ public sealed class Embedding : TenantEntity
     public DateTime GeneratedAt { get; private set; }
     public bool IsActive { get; private set; }
 
+    /// <summary>
+    /// Vecteur stocke en base. Le modele d'origine visait Qdrant (QdrantPointId /
+    /// QdrantCollectionName) ; tant qu'aucune base vectorielle externe n'est
+    /// deployee, le vecteur vit ici et la similarite est calculee applicativement.
+    /// </summary>
+    public float[] Vector { get; private set; } = [];
+
+    /// <summary>Cree un embedding stocke localement, sans base vectorielle externe.</summary>
+    public static Embedding CreateLocal(Guid organizationId, string sourceType, Guid sourceId,
+        Guid? chunkId, string embeddingModel, float[] vector, int tokenCount)
+    {
+        var e = new Embedding
+        {
+            Id                   = Guid.CreateVersion7(),
+            SourceType           = sourceType,
+            SourceId             = sourceId,
+            ChunkId              = chunkId,
+            EmbeddingModel       = embeddingModel,
+            Dimensions           = vector.Length,
+            Vector               = vector,
+            QdrantPointId        = string.Empty,
+            QdrantCollectionName = "local",
+            TokenCount           = tokenCount,
+            GeneratedAt          = DateTime.UtcNow,
+            IsActive             = true
+        };
+        e.SetOrganizationId(organizationId);
+        e.SetCreated(null);
+        return e;
+    }
+
     public static Embedding Create(Guid organizationId, string sourceType, Guid sourceId,
         string embeddingModel, int dimensions, string qdrantPointId, string collectionName, int tokenCount)
     {

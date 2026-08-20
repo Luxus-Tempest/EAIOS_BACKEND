@@ -254,6 +254,24 @@ public sealed class AnalyticsEventConfiguration : IEntityTypeConfiguration<Analy
     }
 }
 
+public sealed class ReportJobConfiguration : IEntityTypeConfiguration<ReportJob>
+{
+    public void Configure(EntityTypeBuilder<ReportJob> b)
+    {
+        b.ToTable("report_jobs", "analytics");
+        b.HasKey(r => r.Id); b.Property(r => r.Id).ValueGeneratedNever();
+        b.Property(r => r.ReportType).HasMaxLength(50).IsRequired();
+        b.Property(r => r.Format).HasMaxLength(10).IsRequired();
+        b.Property(r => r.Status).HasConversion<string>().HasMaxLength(30);
+        b.Property(r => r.FileName).HasMaxLength(300);
+        b.Property(r => r.ContentType).HasMaxLength(150);
+        b.Property(r => r.StorageKey).HasMaxLength(500);
+        b.Property(r => r.FailureReason).HasMaxLength(1000);
+        b.HasIndex(r => new { r.OrganizationId, r.Status });
+        b.HasIndex(r => new { r.OrganizationId, r.RequestedBy });
+    }
+}
+
 // ── Notification ──────────────────────────────────────────────────────────────
 
 public sealed class NotificationConfiguration : IEntityTypeConfiguration<Domain.Notification.Notification>

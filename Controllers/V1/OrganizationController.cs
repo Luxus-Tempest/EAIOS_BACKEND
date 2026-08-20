@@ -15,6 +15,8 @@ public sealed class OrganizationController(
     IUserRepository       userRepo,
     IInvitationRepository invitationRepo,
     IPermissionService    permService,
+    EAIOS.Api.Infrastructure.Email.IEmailService emailService,
+    EAIOS.Api.Infrastructure.Analytics.IAnalyticsTracker analytics,
     EAIOS.Api.Infrastructure.Persistence.PlatformDbContext platformDb) : V1ApiController
 {
     // ── GET /api/v1/organization ──────────────────────────────────────────────
@@ -160,7 +162,14 @@ public sealed class OrganizationController(
         await invitationRepo.AddAsync(invitation, ct);
         await invitationRepo.SaveAsync(ct);
 
-        // TODO (prod) : déclencher IEmailService.SendInvitationEmailAsync(invitation)
+        var (orgName, inviterName) = await ResolveInvitationContextAsync(ActorId.Value, ct);
+        await emailService.SendInvitationAsync(
+            invitation.Email, orgName, inviterName, invitation.Token, invitation.PersonalMessage, ct);
+
+        await analytics.TrackAsync(
+            EAIOS.Api.Infrastructure.Analytics.AnalyticsEventTypes.UserInvited,
+            resourceId: invitation.Id, resourceType: "Invitation", ct: ct);
+
         return Ok200(new
         {
             invitation.Id,
@@ -168,6 +177,8 @@ public sealed class OrganizationController(
             invitation.Role,
             invitation.Status,
             invitation.ExpiresAt,
+            invitation.ResendCount,
+            invitation.LastSentAt,
             // Token retourné uniquement en dev pour faciliter les tests
             InvitationUrl = $"/register?token={invitation.Token}"
         });
@@ -213,8 +224,38 @@ public sealed class OrganizationController(
         if (!invitation.IsValid)
             return UnprocessableEntity("Cette invitation a expiré ou n'est plus valide.");
 
-        // TODO (prod) : re-déclencher IEmailService.SendInvitationEmailAsync(invitation)
-        return Ok200(new { message = "Invitation renvoyée.", invitation.Id, invitation.Email });
+        if (!ActorId.HasValue) return Unauthorized();
+
+        // Resend() incrémente le compteur ET repousse l'échéance : sans cet appel,
+        // le renvoi laissait l'invitation expirer à sa date initiale.
+        invitation.Resend();
+        invitationRepo.Update(invitation);
+        await invitationRepo.SaveAsync(ct);
+
+        var (orgName, inviterName) = await ResolveInvitationContextAsync(ActorId.Value, ct);
+        await emailService.SendInvitationAsync(
+            invitation.Email, orgName, inviterName, invitation.Token, invitation.PersonalMessage, ct);
+
+        return Ok200(new
+        {
+            message = "Invitation renvoyée.",
+            invitation.Id,
+            invitation.Email,
+            invitation.ResendCount,
+            invitation.LastSentAt,
+            invitation.ExpiresAt
+        });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>Nom de l'organisation et de l'invitant, utilisés dans le corps de l'email.</summary>
+    private async Task<(string OrgName, string InviterName)> ResolveInvitationContextAsync(Guid actorId, CancellationToken ct)
+    {
+        var org     = await platformDb.Organizations.FindAsync([TenantId], ct);
+        var inviter = await userRepo.GetByIdAsync(actorId, ct);
+
+        return (org?.Name ?? "EAIOS", inviter?.FullName ?? "Un administrateur");
     }
 
     // ── Permissions ───────────────────────────────────────────────────────────

@@ -36,8 +36,8 @@ public sealed class WorkflowDefinition : TenantEntity
     public string? GraphJson { get; private set; }  // Draft graph (nodes + edges)
 
     // ── Relations ──────────────────────────────────────────────────────────────
-    public IReadOnlyList<WorkflowDefinitionVersion> DefinitionVersions { get; private set; } = [];
-    public IReadOnlyList<WorkflowInstance> Instances { get; private set; } = [];
+    public IReadOnlyList<WorkflowDefinitionVersion> DefinitionVersions { get; private set; } = new List<WorkflowDefinitionVersion>();
+    public IReadOnlyList<WorkflowInstance> Instances { get; private set; } = new List<WorkflowInstance>();
 
     public static WorkflowDefinition Create(Guid organizationId, string name, Guid ownerId,
         string? description = null, string? graphJson = null)
@@ -136,7 +136,7 @@ public sealed class WorkflowInstance : TenantEntity
     public string VariablesJson { get; private set; } = "{}";
     public string? ErrorMessage { get; private set; }
 
-    public IReadOnlyList<WorkflowTask> Tasks { get; private set; } = [];
+    public IReadOnlyList<WorkflowTask> Tasks { get; private set; } = new List<WorkflowTask>();
 
     public static WorkflowInstance Create(Guid organizationId, Guid definitionId, Guid definitionVersionId,
         string definitionVersion, WorkflowTriggerType triggerType, Guid? triggeredBy,

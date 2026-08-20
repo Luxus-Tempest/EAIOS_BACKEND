@@ -54,8 +54,8 @@ public sealed class KnowledgeItem : TenantEntity
     public float? RelevanceScore { get; private set; }
 
     // ── Relations ──────────────────────────────────────────────────────────────
-    public IReadOnlyList<KnowledgeChunk> Chunks { get; private set; } = [];
-    public IReadOnlyList<KnowledgeRelation> Relations { get; private set; } = [];
+    public IReadOnlyList<KnowledgeChunk> Chunks { get; private set; } = new List<KnowledgeChunk>();
+    public IReadOnlyList<KnowledgeRelation> Relations { get; private set; } = new List<KnowledgeRelation>();
 
     public static KnowledgeItem Create(Guid organizationId, string title, KnowledgeItemType type,
         KnowledgeItemSource source, Guid createdBy, string? content = null, Guid? sourceDocumentId = null)
@@ -146,6 +146,21 @@ public sealed class KnowledgeChunk : TenantEntity
     }
 
     public void SetEmbedding(string qdrantPointId, string model) { QdrantPointId = qdrantPointId; EmbeddingModel = model; IsEmbedded = true; EmbeddedAt = DateTime.UtcNow; }
+
+    /// <summary>Marque le chunk comme vectorise dans le magasin local (sans Qdrant).</summary>
+    public void MarkEmbeddedLocally(string model)
+    {
+        EmbeddingModel = model;
+        IsEmbedded     = true;
+        EmbeddedAt     = DateTime.UtcNow;
+    }
+
+    /// <summary>Reinitialise l'etat de vectorisation apres une modification du contenu.</summary>
+    public void ResetEmbedding()
+    {
+        IsEmbedded = false;
+        EmbeddedAt = null;
+    }
     public void SetPageRange(int? startPage, int? endPage) { StartPage = startPage; EndPage = endPage; }
     public void SetContext(string? before, string? after) { ContextBefore = before; ContextAfter = after; }
 }

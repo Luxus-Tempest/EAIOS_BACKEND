@@ -70,14 +70,80 @@ public static class ServiceExtensions
         services.AddSingleton<IPasswordService, PasswordService>();
         services.AddSingleton<ITotpService,     TotpService>();
         services.AddSingleton<IApiKeyService,   ApiKeyService>();
+
+        // Data Protection alimente le chiffrement des identifiants de connecteurs.
+        services.AddDataProtection();
+        services.AddScoped<ICredentialProtector, CredentialProtector>();
         services.AddScoped<IPermissionService,  PermissionService>();
 
         services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationPolicyProvider, PermissionPolicyProvider>();
         services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, PermissionAuthorizationHandler>();
 
         // ── Storage & AI ────────────────────────────────────────────────────
-        services.AddScoped<IStorageService, LocalStorageService>();
-        services.AddScoped<ILlmService,     StubLlmService>();
+        var storageProvider = configuration["Storage:Provider"] ?? "Local";
+        if (storageProvider.Equals("MinIO", StringComparison.OrdinalIgnoreCase) ||
+            storageProvider.Equals("S3", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<Amazon.S3.IAmazonS3>(sp =>
+            {
+                var s3Config = new Amazon.S3.AmazonS3Config
+                {
+                    ServiceURL = configuration["Storage:S3:ServiceUrl"] ?? "http://localhost:9000",
+                    ForcePathStyle = configuration.GetValue("Storage:S3:ForcePathStyle", true),
+                    UseHttp = true
+                };
+                var accessKey = configuration["Storage:S3:AccessKey"] ?? "minioadmin";
+                var secretKey = configuration["Storage:S3:SecretKey"] ?? "minioadmin";
+                return new Amazon.S3.AmazonS3Client(accessKey, secretKey, s3Config);
+            });
+            services.AddScoped<IStorageService, MinioStorageService>();
+        }
+        else
+        {
+            services.AddScoped<IStorageService, LocalStorageService>();
+        }
+
+        // ── Fournisseur LLM ─────────────────────────────────────────────────
+        // Le stub reste le defaut : il permet de faire tourner toute la chaine IA
+        // sans cle API. Ai:Provider bascule sur un vrai fournisseur.
+        var aiProvider = configuration["Ai:Provider"] ?? "Stub";
+        if (aiProvider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
+            || aiProvider.Equals("AzureOpenAI", StringComparison.OrdinalIgnoreCase)
+            || aiProvider.Equals("Compatible", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddHttpClient("LlmClient");
+            services.AddScoped<ILlmService, OpenAiLlmService>();
+        }
+        else
+        {
+            services.AddScoped<ILlmService, StubLlmService>();
+        }
+
+        // ── Recherche vectorielle ───────────────────────────────────────────
+        services.AddScoped<IVectorSearchService, VectorSearchService>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.EmbeddingWorker>();
+
+        // ── Email ───────────────────────────────────────────────────────────
+        var emailProvider = configuration["Email:Provider"] ?? "Logging";
+        if (emailProvider.Equals("Smtp", StringComparison.OrdinalIgnoreCase))
+            services.AddScoped<EAIOS.Api.Infrastructure.Email.IEmailService, EAIOS.Api.Infrastructure.Email.SmtpEmailService>();
+        else
+            services.AddScoped<EAIOS.Api.Infrastructure.Email.IEmailService, EAIOS.Api.Infrastructure.Email.LoggingEmailService>();
+
+        // ── Analytics tracking ──────────────────────────────────────────────
+        services.AddScoped<EAIOS.Api.Infrastructure.Analytics.IAnalyticsTracker,
+                           EAIOS.Api.Infrastructure.Analytics.AnalyticsTracker>();
+
+        // ── Rapports asynchrones ────────────────────────────────────────────
+        services.AddScoped<EAIOS.Api.Application.Analytics.IReportService,
+                           EAIOS.Api.Application.Analytics.ReportService>();
+        services.AddSingleton<EAIOS.Api.Infrastructure.BackgroundJobs.ReportQueueSignal>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.ReportGenerationWorker>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.ReportRetentionWorker>();
+
+        // ── Livraison des webhooks ──────────────────────────────────────────
+        services.AddSingleton<EAIOS.Api.Infrastructure.BackgroundJobs.WebhookDeliveryQueue>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.WebhookDeliveryWorker>();
 
         // ── Domain & Application Services ───────────────────────────────────
         services.AddScoped<IAuditService,         AuditService>();
@@ -128,12 +194,15 @@ public static class ServiceExtensions
         services.AddScoped<IDocumentVersionRepository,  DocumentVersionRepository>();
         services.AddScoped<IFolderRepository,           FolderRepository>();
         services.AddScoped<IDocumentShareRepository,    DocumentShareRepository>();
-        services.AddScoped<ILegalHoldRepository,        LegalHoldRepository>();
+        services.AddScoped<ILegalHoldRepository,         LegalHoldRepository>();
+        services.AddScoped<IMetadataValueRepository,     MetadataValueRepository>();
+        services.AddScoped<IMetadataTemplateRepository,  MetadataTemplateRepository>();
 
         // ── Knowledge Repositories ──────────────────────────────────────────
-        services.AddScoped<IKnowledgeItemRepository,  KnowledgeItemRepository>();
-        services.AddScoped<IKnowledgeChunkRepository, KnowledgeChunkRepository>();
-        services.AddScoped<IKnowledgePackRepository,  KnowledgePackRepository>();
+        services.AddScoped<IKnowledgeItemRepository,     KnowledgeItemRepository>();
+        services.AddScoped<IKnowledgeChunkRepository,    KnowledgeChunkRepository>();
+        services.AddScoped<IKnowledgePackRepository,     KnowledgePackRepository>();
+        services.AddScoped<IKnowledgeRelationRepository, KnowledgeRelationRepository>();
 
         // ── Agent Repositories ──────────────────────────────────────────────
         services.AddScoped<IAgentRepository,          AgentRepository>();
@@ -154,9 +223,11 @@ public static class ServiceExtensions
         services.AddScoped<IConnectorDefinitionRepository, ConnectorDefinitionRepository>();
         services.AddScoped<ISyncJobRepository,           SyncJobRepository>();
         services.AddScoped<IWebhookSubscriptionRepository, WebhookSubscriptionRepository>();
+        services.AddScoped<IReportJobRepository,          ReportJobRepository>();
 
         // ── HTTP Clients ────────────────────────────────────────────────────
         services.AddHttpClient("WebhookClient");
+        services.AddHttpClient("ConnectorProbe");
 
         return services;
     }

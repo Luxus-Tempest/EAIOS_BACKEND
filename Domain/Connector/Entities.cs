@@ -48,7 +48,7 @@ public sealed class ConnectorInstance : TenantEntity
     public SyncHealth Health { get; private set; }
     public string? LastHealthCheckMessage { get; private set; }
 
-    public IReadOnlyList<SyncJob> SyncJobs { get; private set; } = [];
+    public IReadOnlyList<SyncJob> SyncJobs { get; private set; } = new List<SyncJob>();
 
     public static ConnectorInstance Create(Guid organizationId, Guid definitionId, string name,
         Guid createdBy, string? description = null, Guid? workspaceId = null,

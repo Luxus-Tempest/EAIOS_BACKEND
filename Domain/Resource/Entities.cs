@@ -66,9 +66,9 @@ public sealed class Document : TenantEntity
     public int DownloadCount { get; private set; }
 
     // ── Relations ──────────────────────────────────────────────────────────────
-    public IReadOnlyList<DocumentVersion> Versions { get; private set; } = [];
-    public IReadOnlyList<DocumentShare> Shares { get; private set; } = [];
-    public IReadOnlyList<MetadataValue> MetadataValues { get; private set; } = [];
+    public IReadOnlyList<DocumentVersion> Versions { get; private set; } = new List<DocumentVersion>();
+    public IReadOnlyList<DocumentShare> Shares { get; private set; } = new List<DocumentShare>();
+    public IReadOnlyList<MetadataValue> MetadataValues { get; private set; } = new List<MetadataValue>();
 
     public static Document Create(Guid organizationId, string title, Guid ownerId,
         ResourceType type = ResourceType.Document,
@@ -122,6 +122,9 @@ public sealed class Document : TenantEntity
         if (tags is not null) Tags = tags;
     }
     public void MoveToTrash() => Status = ResourceStatus.Trashed;
+
+    /// <summary>Rattache le document à un autre dossier, ou à la racine si null.</summary>
+    public void MoveToFolder(Guid? folderId) => FolderId = folderId;
     public void Restore() => Status = ResourceStatus.Active;
     public void SetLegalHold(bool active) => HasLegalHold = active;
     public void IncrementView() => ViewCount++;
@@ -240,6 +243,13 @@ public sealed class Folder : TenantEntity
     }
 
     public void Rename(string newName) => Name = newName.Trim();
+
+    /// <summary>Met à jour la présentation. Passer null laisse la valeur inchangée.</summary>
+    public void UpdateAppearance(string? color, string? iconCode)
+    {
+        if (color is not null)    Color    = color;
+        if (iconCode is not null) IconCode = iconCode;
+    }
     public void Move(Guid? newParentId, string newPath, int newDepth) { ParentId = newParentId; Path = newPath; Depth = newDepth; }
     public void Archive() => Status = FolderStatus.Archived;
     public void IncrementDocumentCount() => DocumentCount++;
@@ -260,19 +270,36 @@ public sealed class MetadataTemplate : TenantEntity
     public string FieldsJson { get; private set; } = "[]";   // JSON: MetadataFieldDefinition[]
     public string[] ApplicableResourceTypes { get; private set; } = [];
 
-    public static MetadataTemplate Create(Guid organizationId, string name, Guid createdBy, string fieldsJson = "[]")
+    public static MetadataTemplate Create(Guid organizationId, string name, Guid createdBy,
+        string fieldsJson = "[]", string? description = null, string[]? applicableResourceTypes = null)
     {
         var t = new MetadataTemplate
         {
             Id = Guid.CreateVersion7(),
             Name = name.Trim(),
+            Description = description,
             IsActive = true,
-            FieldsJson = fieldsJson
+            FieldsJson = fieldsJson,
+            ApplicableResourceTypes = applicableResourceTypes ?? []
         };
         t.SetOrganizationId(organizationId);
         t.SetCreated(createdBy);
         return t;
     }
+
+    public void Update(string? name, string? description, string? fieldsJson, string[]? applicableResourceTypes)
+    {
+        if (!string.IsNullOrWhiteSpace(name)) Name = name.Trim();
+        if (description is not null)          Description = description;
+        if (fieldsJson is not null)           FieldsJson = fieldsJson;
+        if (applicableResourceTypes is not null) ApplicableResourceTypes = applicableResourceTypes;
+    }
+
+    public void Activate()   => IsActive = true;
+    public void Deactivate() => IsActive = false;
+
+    /// <summary>Marque le modele comme fourni par la plateforme : il devient non modifiable.</summary>
+    public void MarkAsSystem() => IsSystem = true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

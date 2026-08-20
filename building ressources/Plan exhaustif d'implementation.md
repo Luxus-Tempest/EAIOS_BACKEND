@@ -226,9 +226,15 @@ backend/
 │   │
 │   ├── Storage/                              ← Abstraction stockage fichiers
 │   │   ├── IStorageService.cs
-│   │   ├── LocalStorageService.cs            ← Dev : stockage local (remplace MinIO)
+│   │   ├── LocalStorageService.cs            ← Dev : stockage local fallback
+│   │   ├── MinioStorageService.cs            ← Dev/Prod : Stockage MinIO / S3 avec AWSSDK.S3
 │   │   └── StorageOptions.cs                 ← Configuration storage
 │   │
+├── infrastructure/                           ← Infrastructure Docker & Services externes
+│   ├── docker-compose.yml                    ← MinIO S3 (API: 9000, Console: 9001) + Auto-init bucket
+│   ├── .env.example                          ← Environment variables MinIO
+│   └── README.md                             ← Guide de démarrage Docker
+│
 │   ├── Search/                               ← Abstraction moteur de recherche
 │   │   ├── ISearchService.cs                 ← Interface search (fulltext + semantic)
 │   │   └── InMemorySearchService.cs          ← Dev stub : simulation résultats
@@ -720,19 +726,28 @@ public sealed class ApiKeyService
 ```csharp
 public interface IStorageService
 {
-    Task<string> UploadAsync(Stream content, string fileName, string contentType, string organizationId, CancellationToken ct);
-    Task<string> GetSignedDownloadUrlAsync(string storageKey, TimeSpan expiry, CancellationToken ct);
-    Task<string> GetSignedPreviewUrlAsync(string storageKey, TimeSpan expiry, CancellationToken ct);
-    Task DeleteAsync(string storageKey, CancellationToken ct);
-    Task<UploadSession> InitiateMultipartAsync(string fileName, long totalSize, string organizationId, CancellationToken ct);
-    Task UploadChunkAsync(string uploadId, int chunkIndex, Stream data, string checksum, CancellationToken ct);
-    Task<string> CompleteMultipartAsync(string uploadId, IReadOnlyList<ChunkInfo> chunks, CancellationToken ct);
-    Task AbortMultipartAsync(string uploadId, CancellationToken ct);
+    Task<StorageUploadResult> UploadAsync(Stream content, string fileName, string contentType, string tenantId, CancellationToken ct = default);
+    Task<string> GetDownloadUrlAsync(string storageKey, TimeSpan? expiry = null, CancellationToken ct = default);
+    Task<string> GetPresignedUploadUrlAsync(string fileName, string contentType, string tenantId, TimeSpan? expiry = null, CancellationToken ct = default);
+    Task<string?> GetPreviewUrlAsync(string storageKey, CancellationToken ct = default);
+    Task DeleteAsync(string storageKey, CancellationToken ct = default);
+    Task<bool> ExistsAsync(string storageKey, CancellationToken ct = default);
+    Task<MultipartSession> InitiateMultipartAsync(string fileName, long totalSizeBytes, string contentType, string tenantId, CancellationToken ct = default);
+    Task UploadPartAsync(string uploadId, int partNumber, Stream data, CancellationToken ct = default);
+    Task<StorageUploadResult> CompleteMultipartAsync(string uploadId, string tenantId, CancellationToken ct = default);
+    Task AbortMultipartAsync(string uploadId, CancellationToken ct = default);
 }
 ```
 
 #### [NEW] Infrastructure/Storage/LocalStorageService.cs
-Implémentation dev : stockage sur disque local (`wwwroot/uploads/`), URLs locales.
+Implémentation dev fallback : stockage sur disque local (`uploads/`), URLs locales présignées.
+
+#### [NEW] Infrastructure/Storage/MinioStorageService.cs
+Implémentation MinIO / S3 avec `AWSSDK.S3` :
+- Upload direct sur bucket S3 (`eaios-uploads`).
+- Génération d'URLs présignées PUT/GET avec `GetPreSignedURL`.
+- En-tête `Content-Disposition: inline` pour prévisualisation directe.
+- Support du multipart upload S3.
 
 #### [NEW] Infrastructure/AI/ILlmService.cs
 ```csharp
@@ -1146,12 +1161,20 @@ public partial class Program;
     "Argon2Parallelism": 4
   },
   "Storage": {
-    "Provider": "Local",
-    "LocalBasePath": "wwwroot/uploads",
-    "BaseUrl": "http://localhost:5000/uploads",
+    "Provider": "MinIO",
+    "LocalBasePath": "uploads",
+    "BaseUrl": "http://localhost:5257/uploads",
     "MaxFileSizeBytes": 10485760,
-    "MaxMultipartSizeBytes": 5368709120,
-    "AllowedMimeTypes": ["application/pdf", "application/vnd.openxmlformats-officedocument.*", "image/*", "text/*"]
+    "MaxMultipartFileSizeBytes": 5368709120,
+    "ChunkSizeBytes": 5242880,
+    "S3": {
+      "ServiceUrl": "http://localhost:9000",
+      "AccessKey": "minioadmin",
+      "SecretKey": "minioadmin",
+      "BucketName": "eaios-uploads",
+      "ForcePathStyle": true
+    },
+    "AllowedExtensions": [ ".pdf", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".tiff", ".mp4", ".avi", ".mov", ".mp3", ".wav", ".json", ".xml", ".csv", ".yaml", ".yml", ".txt", ".md", ".zip", ".tar", ".7z" ]
   },
   "Ai": {
     "Provider": "Stub",
@@ -1177,6 +1200,42 @@ public partial class Program;
   "Ai": { "Provider": "Stub" }
 }
 ```
+
+---
+
+## Module Complémentaire — MinIO S3, Webhooks Sécurisés, Realtime SSE & Platform Admin
+
+### 1. Stockage Objet MinIO S3 & Infrastructure Docker (`infrastructure/`)
+- **Docker Infrastructure (`infrastructure/docker-compose.yml`)** :
+  - Conteneur `minio` (`minio/minio:latest`) exposant l'API S3 sur `:9000` et la Console Web sur `:9001`.
+  - Conteneur `createbuckets` (`minio/mc:latest`) pour la création et la configuration automatique du bucket `eaios-uploads`.
+  - Configuration d'environnement via `infrastructure/.env.example` et documentation dans `infrastructure/README.md`.
+- **SDK AWS S3 Integration (`AWSSDK.S3`)** :
+  - Service `MinioStorageService.cs` dans `Infrastructure/Storage/` implémentant `IStorageService`.
+  - Support de l'upload direct, suppression, métadonnées, multipart et génération d'URLs présignées (PUT/GET/Preview).
+  - Endpoint `POST /api/v1/uploads/presigned-url` dans `ResourceUploadsController.cs` pour permettre les uploads directs depuis le client frontend.
+  - Bascule dynamique DI dans `ServiceExtensions.cs` selon la clé `Storage:Provider` (`MinIO` / `S3` vs `Local`).
+
+### 2. Sécurisation Avancée des Webhooks Outbound
+- **Chiffrement des Secrets (`IDataProtectionProvider`)** :
+  - Le secret de chaque abonnement webhook (`WebhookSubscription.Secret`) est chiffré au repos avec `Protector.Protect(req.Secret)` avant persistance.
+  - Déchiffrement à la volée via `Protector.Unprotect` uniquement lors de l'exécution des requêtes HTTP sortantes.
+- **Signature Cryptographique HMAC-SHA256** :
+  - Chaque livraison d'événement (`PublishEventAsync` et `TestSubscriptionAsync`) calcule un hachage HMAC-SHA256 du payload JSON.
+  - La signature est injectée dans l'en-tête HTTP sortant : `X-Eaios-Signature: sha256={hashHex}`.
+
+### 3. Diffusion Événements Temps Réel (Server-Sent Events - SSE)
+- **Service Temps Réel (`RealtimeEventService.cs`)** :
+  - Gestion en mémoire des connexions d'abonnés par tenant/utilisateur.
+- **Endpoint Realtime (`RealtimeController.cs`)** :
+  - `GET /api/v1/realtime/events` retournant un flux continu `text/event-stream` avec heartbeat `connected` et notifications en direct.
+
+### 4. Administration Plateforme & Gestion Utilisateurs
+- **Service Admin Plateforme (`PlatformAdminService.cs`)** :
+  - Provisioning d'organisations/tenants via `Organization.Create(name, slug)`.
+  - Gestion des licences, des quotas de stockage, suspension/réactivation de tenants, export d'audit logs et feature flags.
+- **Listing Utilisateurs Paginé (`UsersController.cs`)** :
+  - Implémentation concrète de `[HttpGet] ListUsers` avec pagination (`page`, `pageSize`), recherche textuelle (`q`) et filtre par statut (`status`) via `IUserRepository.SearchAsync`.
 
 ---
 

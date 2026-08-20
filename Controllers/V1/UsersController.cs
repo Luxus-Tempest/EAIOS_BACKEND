@@ -14,7 +14,9 @@ public sealed class UsersController(
     IUserRepository userRepo,
     ISessionRepository sessionRepo,
     IApiKeyRepository apiKeyRepo,
-    IApiKeyService apiKeyService) : V1ApiController
+    IApiKeyService apiKeyService,
+    EAIOS.Api.Infrastructure.Storage.IStorageService storage,
+    IConfiguration configuration) : V1ApiController
 {
     // ── GET /api/v1/users/me ──────────────────────────────────────────────────
     [HttpGet("me")]
@@ -39,6 +41,77 @@ public sealed class UsersController(
         {
             return NotFound();
         }
+    }
+
+    /// <summary>
+    /// Televerse la photo de profil. Le fichier remplace l'avatar precedent,
+    /// qui est supprime du stockage pour ne pas laisser d'orphelins.
+    /// </summary>
+    [HttpPost("me/avatar")]
+    [RequestSizeLimit(5 * 1024 * 1024)]
+    public async Task<IActionResult> UploadAvatar(IFormFile file, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        if (file is null || file.Length == 0)
+            return UnprocessableEntity("Aucun fichier recu.");
+
+        var maxBytes = configuration.GetValue("Storage:MaxAvatarSizeBytes", 5L * 1024 * 1024);
+        if (file.Length > maxBytes)
+            return UnprocessableEntity($"Image trop volumineuse (maximum {maxBytes / 1024 / 1024} Mo).");
+
+        // Restreindre aux types image : le fichier est ensuite servi tel quel.
+        string[] allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+        if (!allowed.Contains(file.ContentType, StringComparer.OrdinalIgnoreCase))
+            return UnprocessableEntity("Format non supporte. Utilisez JPEG, PNG, WebP ou GIF.");
+
+        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
+        if (user == null) return NotFound("Utilisateur introuvable.");
+
+        var previousAvatar = user.AvatarUrl;
+
+        await using var stream = file.OpenReadStream();
+        var uploaded = await storage.UploadAsync(
+            stream, file.FileName, file.ContentType, $"{TenantId}/avatars", ct);
+
+        user.SetAvatarUrl(uploaded.StorageKey);
+        userRepo.Update(user);
+        await userRepo.SaveAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(previousAvatar) && previousAvatar != uploaded.StorageKey)
+        {
+            try { await storage.DeleteAsync(previousAvatar, ct); }
+            catch (Exception) { /* l'ancien fichier peut deja avoir disparu */ }
+        }
+
+        return Ok200(new
+        {
+            AvatarUrl = uploaded.StorageKey,
+            DownloadUrl = await storage.GetDownloadUrlAsync(uploaded.StorageKey, TimeSpan.FromHours(24), ct),
+            uploaded.FileSizeBytes
+        });
+    }
+
+    /// <summary>Supprime la photo de profil.</summary>
+    [HttpDelete("me/avatar")]
+    public async Task<IActionResult> DeleteAvatar(CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
+        if (user == null) return NotFound("Utilisateur introuvable.");
+
+        if (!string.IsNullOrWhiteSpace(user.AvatarUrl))
+        {
+            try { await storage.DeleteAsync(user.AvatarUrl, ct); }
+            catch (Exception) { /* fichier deja absent */ }
+
+            user.ClearAvatar();
+            userRepo.Update(user);
+            await userRepo.SaveAsync(ct);
+        }
+
+        return NoContent204();
     }
 
     [HttpPost("me/change-password")]

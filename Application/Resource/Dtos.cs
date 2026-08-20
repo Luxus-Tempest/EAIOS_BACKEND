@@ -185,3 +185,43 @@ public sealed record LegalHoldDto(
 
 public sealed record CreateLegalHoldRequest(string Reason, string? CaseReference = null);
 public sealed record ReleaseLegalHoldRequest(string Reason);
+
+// ── Deplacement ──────────────────────────────────────────────────────────────
+
+/// <summary>Rattache un document a un autre dossier. FolderId null = racine.</summary>
+public sealed record MoveDocumentRequest(Guid? FolderId);
+
+// ── Modeles de metadonnees ───────────────────────────────────────────────────
+
+public sealed record MetadataTemplateDto(
+    Guid Id,
+    string Name,
+    string? Description,
+    bool IsSystem,
+    bool IsActive,
+    IReadOnlyList<MetadataFieldDefinition> Fields,
+    string[] ApplicableResourceTypes,
+    DateTime CreatedAt);
+
+/// <summary>Definition d'un champ de metadonnee au sein d'un modele.</summary>
+public sealed record MetadataFieldDefinition(
+    string Key,
+    string Label,
+    string Type = "text",          // text, number, date, boolean, list
+    bool Required = false,
+    string[]? Options = null,      // valeurs autorisees pour le type list
+    string? DefaultValue = null,
+    string? HelpText = null);
+
+public sealed record CreateMetadataTemplateRequest(
+    string Name,
+    string? Description = null,
+    IReadOnlyList<MetadataFieldDefinition>? Fields = null,
+    string[]? ApplicableResourceTypes = null);
+
+public sealed record UpdateMetadataTemplateRequest(
+    string? Name,
+    string? Description,
+    IReadOnlyList<MetadataFieldDefinition>? Fields,
+    string[]? ApplicableResourceTypes,
+    bool? IsActive);

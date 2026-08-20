@@ -33,6 +33,9 @@
 
     <!-- Health Checks -->
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
+
+    <!-- AWS S3 / MinIO SDK -->
+    <PackageReference Include="AWSSDK.S3" Version="3.7.400" />
   </ItemGroup>
 
 </Project>

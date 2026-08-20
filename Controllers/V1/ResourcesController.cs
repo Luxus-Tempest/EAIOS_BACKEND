@@ -20,6 +20,7 @@ public sealed class DocumentsController(
     IFolderRepository          folderRepo,
     IDocumentShareRepository   shareRepo,
     ILegalHoldRepository       holdRepo,
+    IMetadataValueRepository   metadataRepo,
     IStorageService            storage,
     IPermissionService         permService) : V1ApiController
 {
@@ -184,6 +185,205 @@ public sealed class DocumentsController(
         }
     }
 
+    // ── Corbeille ─────────────────────────────────────────────────────────────
+
+    /// <summary>Documents mis à la corbeille, restaurables ou purgeables.</summary>
+    [HttpGet("trash")]
+    public async Task<IActionResult> GetTrash(CancellationToken ct)
+    {
+        var trashed = await documentRepo.GetTrashedAsync(ct);
+        return Ok200(trashed.Select(MapDocument).ToList());
+    }
+
+    /// <summary>Suppression definitive, fichiers du stockage compris.</summary>
+    [HttpDelete("{id:guid}/purge")]
+    public async Task<IActionResult> Purge(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await documentService.PurgeDocumentAsync(id, ct);
+            return NoContent204();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Document introuvable.");
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "LEGAL_HOLD_ACTIVE")
+        {
+            return UnprocessableEntity("Ce document est sous hold legal et ne peut pas etre purge.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ex.Message);
+        }
+    }
+
+    // ── Deplacement ───────────────────────────────────────────────────────────
+
+    [HttpPost("{id:guid}/move")]
+    public async Task<IActionResult> Move(Guid id, [FromBody] MoveDocumentRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var doc = await documentService.MoveDocumentAsync(id, req.FolderId, ct);
+            return Ok200(MapDocument(doc));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Document introuvable.");
+        }
+    }
+
+    // ── Telechargement ────────────────────────────────────────────────────────
+
+    /// <summary>Telecharge la version courante, ou une version precise via ?versionId=.</summary>
+    [HttpGet("{id:guid}/download")]
+    public async Task<IActionResult> Download(Guid id, [FromQuery] Guid? versionId, CancellationToken ct)
+    {
+        try
+        {
+            var download = await documentService.DownloadAsync(id, versionId, ct);
+            return File(download.Content, download.ContentType, download.FileName, enableRangeProcessing: true);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
+    }
+
+    [HttpGet("{id:guid}/versions/{versionId:guid}/download")]
+    public async Task<IActionResult> DownloadVersion(Guid id, Guid versionId, CancellationToken ct)
+    {
+        try
+        {
+            var download = await documentService.DownloadAsync(id, versionId, ct);
+            return File(download.Content, download.ContentType, download.FileName, enableRangeProcessing: true);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
+    }
+
+    /// <summary>Repromeut une version anterieure comme version courante.</summary>
+    [HttpPost("{id:guid}/versions/{versionId:guid}/restore")]
+    public async Task<IActionResult> RestoreVersion(Guid id, Guid versionId, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            var version = await documentService.RestoreVersionAsync(id, versionId, ActorId.Value, ct);
+            return Ok200(MapVersion(version));
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ex.Message);
+        }
+    }
+
+    // ── Metadonnees ───────────────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/metadata")]
+    public async Task<IActionResult> GetMetadata(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            var values = await documentService.GetMetadataAsync(id, ct);
+            return Ok200(values.Select(MapMetadata).ToList());
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Document introuvable.");
+        }
+    }
+
+    [HttpPut("{id:guid}/metadata")]
+    public async Task<IActionResult> SetMetadata(Guid id, [FromBody] UpdateMetadataRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            var values = await documentService.SetMetadataAsync(TenantId, id, req.Values, ActorId.Value, ct);
+            return Ok200(values.Select(MapMetadata).ToList());
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Document introuvable.");
+        }
+        catch (ArgumentException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
+    }
+
+    // ── Partages ──────────────────────────────────────────────────────────────
+
+    /// <summary>Liste les partages actifs d'un document.</summary>
+    [HttpGet("{id:guid}/shares")]
+    public async Task<IActionResult> GetShares(Guid id, CancellationToken ct)
+    {
+        var doc = await documentRepo.GetByIdAsync(id, ct);
+        if (doc == null) return NotFound("Document introuvable.");
+
+        var shares = await shareRepo.GetByDocumentAsync(id, ct);
+        return Ok200(shares.Select(MapShare).ToList());
+    }
+
+    /// <summary>Cree un lien de partage public, accessible sans authentification.</summary>
+    [HttpPost("{id:guid}/public-link")]
+    public async Task<IActionResult> CreatePublicLink(Guid id, [FromBody] CreatePublicLinkRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            var share = await documentService.CreatePublicLinkAsync(
+                TenantId, id, req.Permission, ActorId.Value, req.ExpiresAt, ct);
+
+            return Ok200(new PublicLinkResult(
+                share.Id,
+                share.PublicLinkToken!,
+                $"/api/v1/public/documents/{share.PublicLinkToken}",
+                share.ExpiresAt));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound("Document introuvable.");
+        }
+        catch (ArgumentException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
+    }
+
+    // ── Legal Holds (lecture) ─────────────────────────────────────────────────
+
+    [HttpGet("{id:guid}/legal-holds")]
+    public async Task<IActionResult> GetLegalHolds(Guid id, CancellationToken ct)
+    {
+        var doc = await documentRepo.GetByIdAsync(id, ct);
+        if (doc == null) return NotFound("Document introuvable.");
+
+        var holds = await holdRepo.GetActiveByDocumentAsync(id, ct);
+        return Ok200(holds.Select(h => new LegalHoldDto(
+            h.Id, h.DocumentId, h.Reason, h.CaseReference, h.Status,
+            h.PlacedBy, h.PlacedAt, h.ReleasedAt, h.ReleasedBy, h.ReleaseReason)).ToList());
+    }
+
     // ── Mappers ───────────────────────────────────────────────────────────────
     private static object MapDocument(Document d) => new
     {
@@ -198,6 +398,9 @@ public sealed class DocumentsController(
     {
         v.Id, v.DocumentId, v.VersionNumber, v.FileSizeBytes, v.Checksum, v.IsCurrent, v.ChangeNote, v.CreatedAt
     };
+
+    private static MetadataValueDto MapMetadata(MetadataValue m) =>
+        new(m.FieldKey, m.FieldType, m.Value);
 
     private static object MapShare(DocumentShare s) => new
     {

@@ -82,8 +82,8 @@ public sealed class Agent : TenantEntity
     public decimal TotalCostUsd { get; private set; }
 
     // ── Relations ──────────────────────────────────────────────────────────────
-    public IReadOnlyList<AgentExecution> Executions { get; private set; } = [];
-    public IReadOnlyList<AgentVersion> Versions { get; private set; } = [];
+    public IReadOnlyList<AgentExecution> Executions { get; private set; } = new List<AgentExecution>();
+    public IReadOnlyList<AgentVersion> Versions { get; private set; } = new List<AgentVersion>();
 
     public static Agent Create(Guid organizationId, string name, AgentType type, Guid ownerId,
         string? description = null, string? systemPrompt = null)
