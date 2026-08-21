@@ -64,21 +64,30 @@ public sealed class WebhookDeliveryWorker(
     {
         logger.LogInformation("Worker de livraison des webhooks démarré.");
 
-        await foreach (var delivery in queue.ReadAllAsync(stoppingToken))
+        // ReadAllAsync lève OperationCanceledException à l'arrêt de l'hôte :
+        // l'englober évite de faire remonter une erreur pour un arrêt normal.
+        try
         {
-            try
+            await foreach (var delivery in queue.ReadAllAsync(stoppingToken))
             {
-                await DeliverAsync(delivery, stoppingToken);
+                try
+                {
+                    await DeliverAsync(delivery, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Erreur inattendue lors de la livraison du webhook {SubscriptionId}.",
+                        delivery.SubscriptionId);
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Erreur inattendue lors de la livraison du webhook {SubscriptionId}.",
-                    delivery.SubscriptionId);
-            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Arrêt demandé : rien à signaler.
         }
 
         logger.LogInformation("Worker de livraison des webhooks arrêté.");

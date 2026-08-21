@@ -15,6 +15,8 @@ public sealed class UsersController(
     ISessionRepository sessionRepo,
     IApiKeyRepository apiKeyRepo,
     IApiKeyService apiKeyService,
+    EAIOS.Api.Infrastructure.Persistence.Repositories.AccessControl.IUserRoleRepository userRoleRepo,
+    IPermissionService permissionService,
     EAIOS.Api.Infrastructure.Storage.IStorageService storage,
     IConfiguration configuration) : V1ApiController
 {
@@ -25,7 +27,38 @@ public sealed class UsersController(
         if (!ActorId.HasValue) return Unauthorized();
         var user = await userRepo.GetByIdAsync(ActorId.Value, ct);
         if (user == null) return NotFound();
-        return Ok200(MapUser(user));
+
+        var (roles, permissions) = await ResolveGrantsAsync(user, ct);
+        return Ok200(MapUser(user, roles, permissions));
+    }
+
+    /// <summary>
+    /// Roles et permissions effectifs. Renvoyes par /users/me pour que le client
+    /// puisse conditionner son interface apres un rechargement, sans avoir a
+    /// decoder le jeton d'acces.
+    /// </summary>
+    private async Task<(string[] Roles, string[] Permissions)> ResolveGrantsAsync(
+        Domain.Identity.User user, CancellationToken ct)
+    {
+        var assignments = await userRoleRepo.GetByUserAsync(user.Id, ct);
+        var roles = assignments
+            .Where(a => !a.IsExpired)
+            .Select(a => a.RoleName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var bootstrapAdmin = configuration["Security:BootstrapAdminEmail"] ?? "admin@eaios.io";
+        if (user.Email.Equals(bootstrapAdmin, StringComparison.OrdinalIgnoreCase)
+            && !roles.Contains(Domain.AccessControl.SystemRoles.PlatformAdmin, StringComparer.OrdinalIgnoreCase))
+        {
+            roles.Add(Domain.AccessControl.SystemRoles.PlatformAdmin);
+        }
+
+        if (roles.Count == 0)
+            roles.Add(Domain.AccessControl.SystemRoles.OrgMember);
+
+        var permissions = await permissionService.GetEffectivePermissionsAsync(user.Id, ct);
+        return (roles.ToArray(), permissions);
     }
 
     [HttpPut("me")]
@@ -201,15 +234,16 @@ public sealed class UsersController(
     {
         var result = await userRepo.SearchAsync(q, status, page, pageSize, ct);
         
-        var mappedItems = result.Items.Select(MapUser).ToList();
+        var mappedItems = result.Items.Select(u => MapUser(u)).ToList();
         return Ok(EAIOS.Api.Application.Common.Models.ApiResponse.List(mappedItems, result.TotalCount, page, pageSize));
     }
 
     // ── Mapper ────────────────────────────────────────────────────────────────
-    private static UserDto MapUser(User u) =>
+    private static UserDto MapUser(
+        User u, IReadOnlyList<string>? roles = null, IReadOnlyList<string>? permissions = null) =>
         new(u.Id, u.OrganizationId, u.Email, u.FirstName, u.LastName, u.FullName, u.DisplayName,
             u.AvatarUrl, u.JobTitle, u.Department, u.Locale, u.TimeZone, u.Status, u.IsEmailVerified,
-            u.IsMfaEnabled, u.LastLoginAt, u.CreatedAt, [], []);
+            u.IsMfaEnabled, u.LastLoginAt, u.CreatedAt, roles ?? [], permissions ?? []);
 }
 
 // Missing records for compilation
