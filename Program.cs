@@ -1,5 +1,6 @@
 using EAIOS.Api.Infrastructure;
 using EAIOS.Api.Middleware;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -101,10 +102,32 @@ builder.Services.AddProblemDetails();
 // ── CORS ──────────────────────────────────────────────────────────────────
 builder.Services.AddCors(opts =>
     opts.AddDefaultPolicy(p =>
-        p.WithOrigins(builder.Configuration["Cors:AllowedOrigins"]?.Split(',') ?? ["http://localhost:3000", "http://localhost:5173"])
-         .AllowAnyHeader()
-         .AllowAnyMethod()
-         .AllowCredentials()));
+    {
+        if (builder.Environment.IsDevelopment())
+        {
+            p.SetIsOriginAllowed(origin =>
+            {
+                if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                {
+                    return uri.Host is "localhost" or "127.0.0.1";
+                }
+                return false;
+            })
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+        }
+        else
+        {
+            var origins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+                ?? ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"];
+
+            p.WithOrigins(origins)
+             .AllowAnyHeader()
+             .AllowAnyMethod()
+             .AllowCredentials();
+        }
+    }));
 
 // ── Health Checks ─────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks();
@@ -155,6 +178,13 @@ static async Task SeedDevelopmentDataAsync(WebApplication app)
         var eaiosDb    = sp.GetRequiredService<EAIOS.Api.Infrastructure.Persistence.EaiosDbContext>();
         var platformDb = sp.GetRequiredService<EAIOS.Api.Infrastructure.Persistence.PlatformDbContext>();
         var pwdService = sp.GetRequiredService<EAIOS.Api.Infrastructure.Security.IPasswordService>();
+
+        // Appliquer automatiquement les migrations en mode développement sur base relationnelle
+        if (platformDb.Database.IsRelational())
+        {
+            await platformDb.Database.MigrateAsync();
+            await eaiosDb.Database.MigrateAsync();
+        }
 
         // Organisation de démo
         var orgId   = Guid.Parse("00000000-0000-0000-0000-000000000001");
