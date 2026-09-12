@@ -121,7 +121,35 @@ public static class ServiceExtensions
 
         // ── Recherche vectorielle ───────────────────────────────────────────
         services.AddScoped<IVectorSearchService, VectorSearchService>();
-        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.EmbeddingWorker>();
+
+        // Le runtime d'agents (agent-runtime, Python) indexe désormais les
+        // segments de connaissance dans pgvector. Deux producteurs d'embeddings
+        // coexistant écriraient des vecteurs dans des formats et des dimensions
+        // différents, que rien ne pourrait ensuite comparer.
+        //
+        // Le worker historique reste dans le dépôt et se rallume par
+        // configuration : `AgentRuntime:OwnsIndexing = false` le réactive si le
+        // runtime devait être retiré.
+        var runtimeOwnsIndexing = configuration.GetValue("AgentRuntime:OwnsIndexing", true);
+        if (!runtimeOwnsIndexing)
+            services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.EmbeddingWorker>();
+
+        // ── Extraction de texte et ingestion documentaire ───────────────────
+        services.AddSingleton<EAIOS.Api.Infrastructure.Extraction.ITextExtractor,
+                              EAIOS.Api.Infrastructure.Extraction.TextExtractionService>();
+        services.AddScoped<EAIOS.Api.Application.Knowledge.IDocumentIngestionService,
+                           EAIOS.Api.Application.Knowledge.DocumentIngestionService>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.DocumentIngestionWorker>();
+
+        // ── Lecture gouvernée et rétention ──────────────────────────────────
+        services.AddScoped<EAIOS.Api.Application.Resource.IDocumentAccessService,
+                           EAIOS.Api.Application.Resource.DocumentAccessService>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.RetentionWorker>();
+
+        // ── Le sens du temps et de la parole ────────────────────────────────
+        services.AddScoped<EAIOS.Api.Application.Notification.INotificationDispatcher,
+                           EAIOS.Api.Application.Notification.NotificationDispatcher>();
+        services.AddHostedService<EAIOS.Api.Infrastructure.BackgroundJobs.SchedulerWorker>();
 
         // ── Email ───────────────────────────────────────────────────────────
         var emailProvider = configuration["Email:Provider"] ?? "Logging";
@@ -158,7 +186,26 @@ public static class ServiceExtensions
         services.AddScoped<EAIOS.Api.Application.Knowledge.IKnowledgeGraphService, EAIOS.Api.Application.Knowledge.KnowledgeGraphService>();
         services.AddScoped<EAIOS.Api.Application.Agent.IAgentService, EAIOS.Api.Application.Agent.AgentService>();
         services.AddScoped<EAIOS.Api.Application.Agent.IAgentExecutionService, EAIOS.Api.Application.Agent.AgentExecutionService>();
+        services.AddScoped<EAIOS.Api.Application.Agent.IAgentDecisionService, EAIOS.Api.Application.Agent.AgentDecisionService>();
+        services.AddScoped<EAIOS.Api.Application.Agent.IAgentEvaluationService, EAIOS.Api.Application.Agent.AgentEvaluationService>();
+        // Emet la portee d'execution signee que le runtime d'agents verifie.
+        services.AddScoped<EAIOS.Api.Infrastructure.Security.IAgentContextService, EAIOS.Api.Infrastructure.Security.AgentContextService>();
+
+        // ── Runtime d'agents (agent-runtime, Python) ────────────────────────
+        // Client typé : le pool de connexions est géré par la fabrique, et le
+        // délai d'attente couvre une exécution complète — un agent qui appelle
+        // trois outils et résume prend bien plus qu'une requête ordinaire.
+        var runtimeBaseUrl = configuration["AgentRuntime:BaseUrl"] ?? "http://localhost:8080";
+        var runtimeTimeout = configuration.GetValue("AgentRuntime:TimeoutSeconds", 180);
+
+        services.AddHttpClient<EAIOS.Api.Infrastructure.AI.IAgentRuntimeClient,
+                               EAIOS.Api.Infrastructure.AI.AgentRuntimeClient>(client =>
+        {
+            client.BaseAddress = new Uri(runtimeBaseUrl.TrimEnd('/') + "/");
+            client.Timeout     = TimeSpan.FromSeconds(runtimeTimeout);
+        });
         services.AddScoped<EAIOS.Api.Application.Workflow.IWorkflowService, EAIOS.Api.Application.Workflow.WorkflowService>();
+        services.AddScoped<EAIOS.Api.Application.Workflow.IWorkflowAgentContinuation>(sp => (EAIOS.Api.Application.Workflow.WorkflowService)sp.GetRequiredService<EAIOS.Api.Application.Workflow.IWorkflowService>());
         services.AddScoped<EAIOS.Api.Application.Search.ISearchService, EAIOS.Api.Application.Search.SearchService>();
         services.AddScoped<EAIOS.Api.Application.Connector.IConnectorService, EAIOS.Api.Application.Connector.ConnectorService>();
         services.AddScoped<EAIOS.Api.Application.Connector.IConnectorCatalogService, EAIOS.Api.Application.Connector.ConnectorCatalogService>();
@@ -207,7 +254,9 @@ public static class ServiceExtensions
         // ── Agent Repositories ──────────────────────────────────────────────
         services.AddScoped<IAgentRepository,          AgentRepository>();
         services.AddScoped<IAgentExecutionRepository, AgentExecutionRepository>();
+        services.AddScoped<IAgentConversationRepository, AgentConversationRepository>();
         services.AddScoped<IAgentMemoryRepository,    AgentMemoryRepository>();
+        services.AddScoped<IAgentVersionRepository,   AgentVersionRepository>();
 
         // ── Workflow Repositories ───────────────────────────────────────────
         services.AddScoped<IWorkflowDefinitionRepository, WorkflowDefinitionRepository>();

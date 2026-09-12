@@ -50,6 +50,9 @@ public sealed class WorkflowNode
     /// <summary>Variable évaluée par un noeud de type <c>condition</c>.</summary>
     [JsonPropertyName("variable")]     public string? Variable { get; set; }
 
+    /// <summary>Agent délégué par un noeud de type <c>agent</c>. Ses instructions sont le message envoyé.</summary>
+    [JsonPropertyName("agentId")]      public Guid? AgentId { get; set; }
+
     public string NormalizedType => (Type ?? WorkflowNodeTypes.Automatic).Trim().ToLowerInvariant();
     public string DisplayLabel   => string.IsNullOrWhiteSpace(Label) ? Id : Label!;
 }

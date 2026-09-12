@@ -127,6 +127,9 @@ public sealed class Document : TenantEntity
     public void MoveToFolder(Guid? folderId) => FolderId = folderId;
     public void Restore() => Status = ResourceStatus.Active;
     public void SetLegalHold(bool active) => HasLegalHold = active;
+
+    /// <summary>Échéance de rétention : passée, le document part à la corbeille (sauf conservation légale).</summary>
+    public void SetRetention(DateTime? expiresAt) => RetentionExpiresAt = expiresAt;
     public void IncrementView() => ViewCount++;
     public void IncrementDownload() => DownloadCount++;
     public void SetTags(string[] tags) => Tags = tags;

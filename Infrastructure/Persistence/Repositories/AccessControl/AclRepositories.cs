@@ -35,8 +35,12 @@ public sealed class RoleRepository(EaiosDbContext db) : RepositoryBase<Role>(db)
 
     public async Task<IReadOnlyList<Role>> GetByUserAsync(Guid userId, CancellationToken ct = default)
     {
+        // Une attribution expirée ne confère plus rien : la date est posée à
+        // l'attribution, elle doit donc être vérifiée à chaque lecture.
+        var now = DateTime.UtcNow;
         var roleIds = await db.UserRoles
-            .Where(ur => ur.UserId == userId && !ur.IsDeleted)
+            .Where(ur => ur.UserId == userId && !ur.IsDeleted
+                      && (ur.ExpiresAt == null || ur.ExpiresAt > now))
             .Select(ur => ur.RoleId)
             .Distinct()
             .ToListAsync(ct);
@@ -79,6 +83,10 @@ public interface IUserRoleRepository
 {
     Task<UserRole?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<IReadOnlyList<UserRole>> GetByUserAsync(Guid userId, CancellationToken ct = default);
+    /// <summary>Attributions de plusieurs comptes d'un coup — pour une colonne « Rôles » sans N+1.</summary>
+    Task<IReadOnlyList<UserRole>> GetByUsersAsync(IReadOnlyCollection<Guid> userIds, CancellationToken ct = default);
+    Task<IReadOnlyList<UserRole>> GetByRoleAsync(Guid roleId, CancellationToken ct = default);
+    Task<IReadOnlyList<UserRole>> FindAsync(Guid userId, Guid roleId, CancellationToken ct = default);
     Task<bool> HasRoleAsync(Guid userId, Guid roleId, Guid? workspaceId, CancellationToken ct = default);
     Task AddAsync(UserRole userRole, CancellationToken ct = default);
     void SoftDelete(UserRole userRole);
@@ -89,6 +97,17 @@ public sealed class UserRoleRepository(EaiosDbContext db) : RepositoryBase<UserR
 {
     public async Task<IReadOnlyList<UserRole>> GetByUserAsync(Guid userId, CancellationToken ct = default) =>
         await Set.Where(ur => ur.UserId == userId).OrderByDescending(ur => ur.CreatedAt).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<UserRole>> GetByUsersAsync(IReadOnlyCollection<Guid> userIds, CancellationToken ct = default) =>
+        userIds.Count == 0
+            ? []
+            : await Set.Where(ur => userIds.Contains(ur.UserId)).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<UserRole>> GetByRoleAsync(Guid roleId, CancellationToken ct = default) =>
+        await Set.Where(ur => ur.RoleId == roleId).OrderByDescending(ur => ur.CreatedAt).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<UserRole>> FindAsync(Guid userId, Guid roleId, CancellationToken ct = default) =>
+        await Set.Where(ur => ur.UserId == userId && ur.RoleId == roleId).ToListAsync(ct);
 
     public async Task<bool> HasRoleAsync(Guid userId, Guid roleId, Guid? workspaceId, CancellationToken ct = default) =>
         await Set.AnyAsync(ur => ur.UserId == userId && ur.RoleId == roleId && ur.WorkspaceId == workspaceId, ct);
@@ -132,6 +151,7 @@ public sealed class PolicyRepository(EaiosDbContext db) : RepositoryBase<Policy>
 
 public interface IResourceAclRepository
 {
+    Task<ResourceAcl?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<IReadOnlyList<ResourceAcl>> GetByResourceAsync(Guid resourceId, string resourceType, CancellationToken ct = default);
     Task<IReadOnlyList<ResourceAcl>> GetByPrincipalAsync(Guid principalId, PrincipalType principalType, CancellationToken ct = default);
     Task AddAsync(ResourceAcl acl, CancellationToken ct = default);

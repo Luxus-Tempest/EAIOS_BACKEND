@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="../tests/EAIOS.Api.Tests/EAIOS.Api.Tests.csproj" />
   <Project Path="backend.csproj" />
 </Solution>

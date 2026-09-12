@@ -39,8 +39,10 @@ public static class SystemPermissionsSeed
 
         var rolesToSeed = new[]
         {
+            // Le joker évite qu'un administrateur soit en retard sur le catalogue :
+            // une permission ajoutée demain lui est acquise sans re-semis.
             (SystemRoles.OrgAdmin, "Administrateur organisation — accès complet",
-                AllPermissions.Select(p => p.Code).ToArray()),
+                new[] { "*" }),
 
             (SystemRoles.OrgMember, "Membre standard de l'organisation",
                 new[]
@@ -69,7 +71,15 @@ public static class SystemPermissionsSeed
 
         foreach (var (name, description, permissions) in rolesToSeed)
         {
-            if (existing.Contains(name)) continue;
+            if (existing.Contains(name))
+            {
+                // Idempotent, mais pas figé : un rôle système déjà semé reçoit la
+                // liste courante, pour qu'un re-semis corrige un rôle vide.
+                var current = db.Roles.First(r => r.Name == name);
+                if (!current.PermissionCodes.SequenceEqual(permissions))
+                    current.SetPermissions(permissions);
+                continue;
+            }
             var role = Role.Create(organizationId, name, RoleScope.Organization, isSystem: true, description: description);
             role.SetPermissions(permissions);
             db.Roles.Add(role);
@@ -108,6 +118,7 @@ public static class SystemPermissionsSeed
         (Permissions.DeptRead,   "Voir les départements",  "Organization", "Consulter la hiérarchie"),
         (Permissions.DeptUpdate, "Modifier un département","Organization", "Modifier les paramètres"),
         (Permissions.DeptDelete, "Supprimer un département","Organization","Supprimer des départements"),
+        (Permissions.DeptManage, "Gérer les départements",  "Organization","Créer, modifier et peupler les départements"),
 
         // Access Control
         (Permissions.RoleCreate,  "Créer des rôles",           "AccessControl", "Créer des rôles personnalisés"),
@@ -118,6 +129,7 @@ public static class SystemPermissionsSeed
         (Permissions.PolicyCreate,"Créer des politiques ABAC",  "AccessControl", "Créer des politiques basées sur attributs"),
         (Permissions.PolicyRead,  "Voir les politiques",        "AccessControl", "Consulter les politiques d'accès"),
         (Permissions.PolicyUpdate,"Modifier des politiques",    "AccessControl", "Modifier les politiques d'accès"),
+        (Permissions.AccessControlManage, "Gérer le contrôle d'accès", "AccessControl", "Rôles, attributions, politiques et ACL"),
 
         // Resource
         (Permissions.ResourceCreate,   "Créer des ressources",      "Resource", "Uploader des documents"),

@@ -10,8 +10,44 @@ namespace EAIOS.Api.Controllers.V1;
 /// </summary>
 [Route("api/v1/notifications")]
 public sealed class NotificationsController(
-    INotificationService notifService) : V1ApiController
+    INotificationService notifService,
+    INotificationDispatcher dispatcher,
+    EAIOS.Api.Infrastructure.Persistence.Repositories.Identity.IUserRepository users,
+    EAIOS.Api.Infrastructure.Audit.IAuditService audit) : V1ApiController
 {
+    // ── POST /api/v1/notifications ───────────────────────────────────────────
+    /// <summary>
+    /// Prévenir un collègue. Le message part sous l'identité de l'appelant, par
+    /// les canaux que le destinataire a choisis (boîte, temps réel, courriel).
+    /// C'est le point d'entrée de l'outil <c>notify_user</c> : l'agent ne fait
+    /// que proposer, la personne a déjà approuvé, le backend émet et journalise.
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> Send([FromBody] SendNotificationRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+        if (string.IsNullOrWhiteSpace(req.Title)) return UnprocessableEntity("Le titre est obligatoire.");
+
+        // Le dépôt est filtré par organisation : un identifiant d'une autre
+        // organisation est simplement introuvable, sans autre détail.
+        var recipient = await users.GetByIdAsync(req.RecipientId, ct);
+        if (recipient is null) return NotFound("Destinataire introuvable.");
+
+        var actionUrl = string.IsNullOrWhiteSpace(req.ActionUrl) ? null
+            : req.ActionUrl.StartsWith('/') ? req.ActionUrl : null; // jamais de lien externe fourni par un tiers
+
+        await dispatcher.DispatchAsync(new NotificationRequest(
+            TenantId, recipient.Id, "user.message", req.Title.Trim(), req.Body?.Trim(),
+            actionUrl, req.ActionLabel, req.Priority,
+            new { senderId = ActorId.Value, senderEmail = CurrentUser.Email }), ct);
+
+        await audit.LogAsync(TenantId, "notification.sent", "User", EAIOS.Api.Domain.Platform.AuditEventResult.Success,
+            actorId: ActorId, actorEmail: CurrentUser.Email, resourceId: recipient.Id, resourceType: "User",
+            resourceName: recipient.Email, module: "Notification", ct: ct);
+
+        return Ok200(new { RecipientId = recipient.Id, EventType = "user.message", SentAt = DateTime.UtcNow });
+    }
+
     // ── GET /api/v1/notifications ─────────────────────────────────────────────
     [HttpGet]
     public async Task<IActionResult> List(

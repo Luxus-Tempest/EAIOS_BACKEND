@@ -68,9 +68,19 @@ public sealed record CreateSyncJobRequest(
     Dictionary<string, string>? FieldMapping = null,
     ConflictResolutionStrategy ConflictStrategy = ConflictResolutionStrategy.SourceWins);
 
+/// <summary>
+/// Résultat d'une demande de synchronisation. <c>Status</c> vaut
+/// <c>Completed</c>, <c>PartialSuccess</c>, <c>Failed</c> ou
+/// <c>NotImplemented</c> — ce dernier quand aucun moteur ne sait lire cette
+/// source : la demande est enregistrée, rien n'a été importé, et on le dit.
+/// </summary>
 public sealed record SyncRunResult(
     string ExecutionId,
-    string StatusUrl);
+    string StatusUrl,
+    string Status = "Completed",
+    string? Message = null,
+    int Discovered = 0,
+    int Imported = 0);
 
 public sealed record SyncExecutionDto(
     string ExecutionId,

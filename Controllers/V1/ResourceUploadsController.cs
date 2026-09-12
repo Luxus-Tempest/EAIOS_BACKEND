@@ -21,12 +21,13 @@ public sealed class ResourceUploadsController(
     IStorageService storage,
     IAnalyticsTracker analytics,
     IConfiguration configuration,
-    ILogger<ResourceUploadsController> logger) : V1ApiController
+    ILogger<ResourceUploadsController> logger,
+    EAIOS.Api.Application.Realtime.IRealtimeEventService realtime) : V1ApiController
 {
     // ── Dépôt direct ──────────────────────────────────────────────────────────
 
     [HttpPost("direct")]
-    [Authorize(Policy = "resource.write")]
+    [Authorize(Policy = "resource.create")]
     [RequestSizeLimit(long.MaxValue)]   // la limite réelle est appliquée depuis la configuration
     public async Task<IActionResult> UploadDirect(
         IFormFile file,
@@ -86,6 +87,10 @@ public sealed class ResourceUploadsController(
 
         logger.LogInformation("Document {DocumentId} déposé ({Size} octets).", doc.Id, result.FileSizeBytes);
 
+        // Les listes ouvertes ailleurs se rafraîchissent ; l'extraction démarre sans attendre le balayage.
+        await realtime.PublishToTenantAsync(TenantId, "document.uploaded", new { documentId = doc.Id, doc.Title });
+        EAIOS.Api.Infrastructure.BackgroundJobs.DocumentIngestionWorker.Wakeup.Release();
+
         return Ok200(new
         {
             doc.Id,
@@ -100,7 +105,7 @@ public sealed class ResourceUploadsController(
     // ── Lien présigné ─────────────────────────────────────────────────────────
 
     [HttpPost("presigned-url")]
-    [Authorize(Policy = "resource.write")]
+    [Authorize(Policy = "resource.create")]
     public async Task<IActionResult> GeneratePresignedUrl([FromBody] PresignedUrlRequest req, CancellationToken ct = default)
     {
         if (!ActorId.HasValue) return Unauthorized();
@@ -120,7 +125,7 @@ public sealed class ResourceUploadsController(
 
     /// <summary>Ouvre une session multipart et renvoie la taille de fragment attendue.</summary>
     [HttpPost("multipart/initiate")]
-    [Authorize(Policy = "resource.write")]
+    [Authorize(Policy = "resource.create")]
     public async Task<IActionResult> InitiateMultipart([FromBody] InitiateMultipartRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
@@ -149,7 +154,7 @@ public sealed class ResourceUploadsController(
 
     /// <summary>Dépose un fragment. Les fragments sont numérotés à partir de 1.</summary>
     [HttpPut("multipart/{uploadId}/parts/{partNumber:int}")]
-    [Authorize(Policy = "resource.write")]
+    [Authorize(Policy = "resource.create")]
     [RequestSizeLimit(long.MaxValue)]
     public async Task<IActionResult> UploadPart(
         string uploadId, int partNumber, IFormFile file, CancellationToken ct)
@@ -181,7 +186,7 @@ public sealed class ResourceUploadsController(
 
     /// <summary>Finalise la session et crée le document correspondant.</summary>
     [HttpPost("multipart/{uploadId}/complete")]
-    [Authorize(Policy = "resource.write")]
+    [Authorize(Policy = "resource.create")]
     public async Task<IActionResult> CompleteMultipart(
         string uploadId, [FromBody] CompleteMultipartRequest req, CancellationToken ct)
     {
@@ -254,7 +259,7 @@ public sealed class ResourceUploadsController(
 
     /// <summary>Abandonne une session multipart et libère les fragments déjà déposés.</summary>
     [HttpDelete("multipart/{uploadId}")]
-    [Authorize(Policy = "resource.write")]
+    [Authorize(Policy = "resource.create")]
     public async Task<IActionResult> AbortMultipart(string uploadId, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();

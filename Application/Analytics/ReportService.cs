@@ -54,7 +54,9 @@ public sealed class ReportService(
     PlatformDbContext platformDb,
     IAnalyticsQueryService analytics,
     IStorageService storage,
-    ILogger<ReportService> logger) : IReportService
+    ILogger<ReportService> logger,
+    EAIOS.Api.Application.Notification.INotificationDispatcher? notifier = null,
+    EAIOS.Api.Application.Realtime.IRealtimeEventService? realtime = null) : IReportService
 {
     /// <summary>Garde-fou : au-delà, le rapport est tronqué et le fait est journalisé.</summary>
     private const int MaxRows = 100_000;
@@ -162,6 +164,14 @@ public sealed class ReportService(
             await jobRepo.SaveAsync(ct);
 
             logger.LogInformation("Rapport {ReportId} généré — {Rows} lignes, {Bytes} octets.", job.Id, rows.Count, bytes.LongLength);
+
+            if (notifier is not null)
+                await notifier.DispatchAsync(new EAIOS.Api.Application.Notification.NotificationRequest(
+                    job.OrganizationId, job.RequestedBy, "report.completed",
+                    "Rapport prêt", $"{fileName} — {rows.Count} ligne{(rows.Count > 1 ? "s" : "")}.",
+                    "/reports", "Télécharger"), ct);
+            if (realtime is not null)
+                await realtime.PublishToUserAsync(job.OrganizationId, job.RequestedBy, "report.completed", new { reportId = job.Id });
         }
         catch (Exception ex)
         {

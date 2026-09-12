@@ -40,7 +40,7 @@ public sealed class WorkflowsController(
     public async Task<IActionResult> CreateDefinition([FromBody] CreateWorkflowDefinitionRequest req, CancellationToken ct)
     {
         if (!ActorId.HasValue) return Unauthorized();
-        var def = await workflowService.CreateDefinitionAsync(TenantId, req.Name, req.Description, req.Category, req.NodesJson, ActorId.Value, ct);
+        var def = await workflowService.CreateDefinitionAsync(TenantId, req.Name, req.Description, req.Category, req.NodesJson, ActorId.Value, ct, req.ScheduleCron);
         return Created201("GetWorkflowDefinition", new { id = def.Id }, MapDefinition(def));
     }
 
@@ -49,7 +49,7 @@ public sealed class WorkflowsController(
     {
         try
         {
-            var def = await workflowService.UpdateDefinitionAsync(id, req.Name, req.Description, req.Category, req.NodesJson, ct);
+            var def = await workflowService.UpdateDefinitionAsync(id, req.Name, req.Description, req.Category, req.NodesJson, ct, req.ScheduleCron, req.ClearSchedule);
             return Ok200(MapDefinition(def));
         }
         catch (KeyNotFoundException)
@@ -163,6 +163,32 @@ public sealed class WorkflowsController(
         return OkList(result.Items.Select(MapTask).ToList(), result.TotalCount, page, pageSize);
     }
 
+    /// <summary>
+    /// Ouvre une tâche humaine autonome, hors instance de workflow.
+    ///
+    /// Sert l'outil `create_task` du runtime — un agent qui constate une
+    /// incohérence ouvre une tâche, sans qu'aucun workflow ne soit en cours.
+    /// La décision humaine reste préalable : l'outil s'arrête avant d'appeler ici.
+    /// </summary>
+    [HttpPost("tasks")]
+    public async Task<IActionResult> CreateTask([FromBody] CreateWorkflowTaskRequest req, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        try
+        {
+            var task = await workflowService.CreateStandaloneTaskAsync(
+                TenantId, ActorId.Value, req.Title, req.Instructions,
+                req.TaskType ?? "Review", req.AssigneeId, req.DueAt, ct);
+
+            return Ok200(MapTask(task));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return UnprocessableEntity(ex.Message);
+        }
+    }
+
     [HttpPost("tasks/{taskId:guid}/complete")]
     public async Task<IActionResult> CompleteTask(Guid taskId, [FromBody] CompleteTaskRequest req, CancellationToken ct)
     {
@@ -200,7 +226,11 @@ public sealed class WorkflowsController(
     private static object MapDefinition(WorkflowDefinition d) => new
     {
         d.Id, d.Name, d.Description, d.Category, d.Status,
-        d.PublishedVersionId, d.CreatedAt, d.UpdatedAt
+        d.PublishedVersionId, d.Version, d.VersionNumber, d.OwnerId, d.ExecutionCount, d.Tags, d.IsTemplate,
+        // Le graphe s'écrivait sans se relire : l'éditeur peut enfin rouvrir ce qu'il a écrit.
+        d.GraphJson,
+        d.ScheduleCron, d.NextRunAt,
+        d.CreatedAt, d.UpdatedAt
     };
 
     private static object MapInstance(WorkflowInstance i) => new

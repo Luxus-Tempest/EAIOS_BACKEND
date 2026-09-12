@@ -48,7 +48,10 @@ public sealed record UpdateDocumentRequest(
     string? Description,
     ResourceClassification? Classification,
     Guid? FolderId,
-    string[]? Tags);
+    string[]? Tags,
+    DateTime? RetentionExpiresAt = null,
+    /// <summary>Vrai pour lever l'échéance de rétention : <c>RetentionExpiresAt</c> absent veut dire « inchangé ».</summary>
+    bool ClearRetention = false);
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 

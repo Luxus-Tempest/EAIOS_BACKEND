@@ -63,10 +63,17 @@ public abstract class RepositoryBase<T>(EaiosDbContext db) where T : TenantEntit
     /// <summary>
     /// Soft-delete : marque IsDeleted = true.
     /// Le SaveChanges du DbContext enrichira DeletedAt/DeletedBy.
+    ///
+    /// <para>
+    /// La version précédente posait la valeur par réflexion sur le type concret ;
+    /// le setter privé, déclaré sur <see cref="TenantEntity"/>, n'y est pas
+    /// visible et toute suppression logique échouait avec « Property set method
+    /// not found ». La méthode de domaine fait le travail proprement.
+    /// </para>
     /// </summary>
     public virtual void SoftDelete(T entity)
     {
-        typeof(T).GetProperty(nameof(TenantEntity.IsDeleted))!.SetValue(entity, true);
+        entity.SetSoftDeleted(null);
         Update(entity);
     }
 

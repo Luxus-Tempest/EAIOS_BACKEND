@@ -65,25 +65,28 @@ public sealed class TenantResolutionMiddleware(RequestDelegate next)
 {
     public async Task InvokeAsync(HttpContext context, ITenantContext tenantContext, ICurrentUser currentUser)
     {
-        // Priorité 1 : claim org_id du JWT
+        // Priorité 1 : claim org_id du JWT — la seule source pour un utilisateur ordinaire.
         if (currentUser.OrganizationId.HasValue && currentUser.OrganizationId != Guid.Empty)
         {
             tenantContext.SetTenant(currentUser.OrganizationId.Value);
         }
-        // Priorité 2 : header X-Organization-ID
-        else if (context.Request.Headers.TryGetValue("X-Organization-ID", out var orgHeader)
-                 && Guid.TryParse(orgHeader, out var orgId))
+        // Priorité 2 : en-tête, réservé à un administrateur plateforme authentifié.
+        // Un en-tête est contrôlé par le client : l'honorer pour n'importe quel
+        // porteur de jeton lui permettrait de choisir son organisation.
+        else if (currentUser.IsAuthenticated && currentUser.IsPlatformAdmin
+                 && TryReadOrganizationHeader(context, out var orgId))
         {
             tenantContext.SetTenant(orgId);
         }
-        // Priorité 3 : header X-Tenant-ID (compatibilité)
-        else if (context.Request.Headers.TryGetValue("X-Tenant-ID", out var tenantHeader)
-                 && Guid.TryParse(tenantHeader, out var tenantId))
-        {
-            tenantContext.SetTenant(tenantId);
-        }
 
         await next(context);
+    }
+
+    private static bool TryReadOrganizationHeader(HttpContext context, out Guid organizationId)
+    {
+        organizationId = Guid.Empty;
+        return (context.Request.Headers.TryGetValue("X-Organization-ID", out var orgHeader) && Guid.TryParse(orgHeader, out organizationId))
+            || (context.Request.Headers.TryGetValue("X-Tenant-ID", out var tenantHeader) && Guid.TryParse(tenantHeader, out organizationId));
     }
 }
 

@@ -28,13 +28,18 @@ public sealed record AgentDto(
     decimal TotalCostUsd,
     DateTime CreatedAt);
 
+/// <summary>
+/// Configuration du modèle. <c>Provider</c> est optionnel : absent, le runtime
+/// prend le fournisseur par défaut de l'installation — un entier par défaut
+/// (<c>0</c> = AzureOpenAi) désignait silencieusement un fournisseur sans clé.
+/// </summary>
 public sealed record AgentLlmConfigDto(
-    LlmProvider Provider,
     string Model,
-    float Temperature,
-    int MaxOutputTokens,
-    bool UseStreaming,
-    float? TopP);
+    float Temperature = 0.7f,
+    int MaxOutputTokens = 4096,
+    bool UseStreaming = true,
+    float? TopP = null,
+    LlmProvider? Provider = null);
 
 public sealed record CreateAgentRequest(
     string Name,

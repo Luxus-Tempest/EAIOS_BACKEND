@@ -22,8 +22,43 @@ public sealed class DocumentsController(
     ILegalHoldRepository       holdRepo,
     IMetadataValueRepository   metadataRepo,
     IStorageService            storage,
-    IPermissionService         permService) : V1ApiController
+    IPermissionService         permService,
+    EAIOS.Api.Application.Knowledge.IDocumentIngestionService ingestion,
+    IDocumentAccessService     access,
+    IConfiguration             configuration,
+    EAIOS.Api.Application.Notification.INotificationDispatcher notifier) : V1ApiController
 {
+    /// <summary>
+    /// Le document, s'il existe <b>et</b> que la personne a le droit de le lire.
+    /// Au-delà du plafond ou refusé par une ACL, il « n'existe pas » : dire qu'il
+    /// existe sans y donner accès serait déjà une fuite.
+    /// </summary>
+    private async Task<Document?> ReadableAsync(Guid id, CancellationToken ct)
+    {
+        if (!ActorId.HasValue) return null;
+        var doc = await documentRepo.GetWithDetailsAsync(id, ct);
+        if (doc is null) return null;
+        return await access.CanReadAsync(doc, ActorId.Value, ct) ? doc : null;
+    }
+
+    /// <summary>
+    /// Relance l'extraction de texte et l'indexation de la version courante —
+    /// après un échec, ou quand un format devient pris en charge.
+    /// </summary>
+    [HttpPost("{id:guid}/reindex")]
+    public async Task<IActionResult> Reindex(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            var outcome = await ingestion.ReingestDocumentAsync(id, ct);
+            return Ok200(outcome);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
     // ── Documents (Metadonnées, versions, partages, holds) ────────────────────
 
     // ── Documents ─────────────────────────────────────────────────────────────
@@ -39,16 +74,36 @@ public sealed class DocumentsController(
         [FromQuery] int pageSize = 20,
         CancellationToken ct = default)
     {
+        if (!ActorId.HasValue) return Unauthorized();
+
+        // Ce que la personne peut voir, appliqué dans la requête elle-même : un
+        // document au-dessus de son plafond n'est ni listé, ni compté.
+        var visibility = await access.GetVisibilityAsync(ActorId.Value, ct);
         var result = await documentRepo.SearchAsync(
-            new DocumentQuery(q, folderId, workspaceId, Classification: classification, Status: status, Page: page, PageSize: pageSize), ct);
-        return OkList(result.Items.Select(MapDocument).ToList(), result.TotalCount, result.Page, result.PageSize);
+            new DocumentQuery(q, folderId, workspaceId, Classification: classification, Status: status, Page: page, PageSize: pageSize,
+                MaxClassification: visibility.Unrestricted ? null : visibility.MaxClassification,
+                ExplicitlyAllowed: visibility.ExplicitlyAllowed,
+                ExplicitlyDenied:  visibility.ExplicitlyDenied), ct);
+        return OkList(result.Items.Select(d => MapDocument(d)).ToList(), result.TotalCount, result.Page, result.PageSize);
     }
 
     [HttpGet("{id:guid}", Name = "GetDocument")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
-        var doc = await documentRepo.GetWithDetailsAsync(id, ct);
-        return doc == null ? NotFound() : Ok200(MapDocument(doc));
+        var doc = await ReadableAsync(id, ct);
+        if (doc == null) return NotFound();
+
+        // Une consultation est un fait de conformité : « qui a lu ce contrat ? »
+        await access.RecordReadAsync(doc, "document.viewed", ct);
+        var tracked = await documentRepo.GetByIdAsync(id, ct);
+        if (tracked is not null)
+        {
+            tracked.IncrementView();
+            documentRepo.Update(tracked);
+            await documentRepo.SaveAsync(ct);
+        }
+
+        return Ok200(MapDocument(doc));
     }
 
     // Upload logic moved to ResourceUploadsController
@@ -60,6 +115,8 @@ public sealed class DocumentsController(
         if (doc == null) return NotFound();
 
         doc.Update(req.Title, req.Description, req.Classification, req.Tags);
+        if (req.ClearRetention) doc.SetRetention(null);
+        else if (req.RetentionExpiresAt.HasValue) doc.SetRetention(req.RetentionExpiresAt.Value.ToUniversalTime());
         documentRepo.Update(doc);
         await documentRepo.SaveAsync(ct);
 
@@ -103,6 +160,8 @@ public sealed class DocumentsController(
     [HttpGet("{id:guid}/versions")]
     public async Task<IActionResult> GetVersions(Guid id, CancellationToken ct)
     {
+        if (await ReadableAsync(id, ct) is null) return NotFound();
+
         var versions = await versionRepo.GetByDocumentAsync(id, ct);
         return Ok200(versions.Select(MapVersion).ToList());
     }
@@ -142,6 +201,14 @@ public sealed class DocumentsController(
         var share = DocumentShare.CreateInternal(TenantId, id, req.TargetType, req.TargetId ?? Guid.Empty, req.Permission, ActorId.Value, req.ExpiresAt);
         await shareRepo.AddAsync(share, ct);
         await shareRepo.SaveAsync(ct);
+
+        // Un partage qui ne prévient personne n'est qu'une ligne en base.
+        if (req.TargetType == ShareTargetType.User && req.TargetId is { } recipient && recipient != ActorId.Value)
+            await notifier.DispatchAsync(new EAIOS.Api.Application.Notification.NotificationRequest(
+                TenantId, recipient, "document.shared",
+                $"Document partagé : {doc.Title}",
+                $"Accès « {req.Permission} »{(req.ExpiresAt.HasValue ? $" jusqu'au {req.ExpiresAt:dd/MM/yyyy}" : "")}.",
+                $"/documents/{doc.Id}", "Ouvrir"), ct);
 
         return Ok200(MapShare(share));
     }
@@ -191,8 +258,15 @@ public sealed class DocumentsController(
     [HttpGet("trash")]
     public async Task<IActionResult> GetTrash(CancellationToken ct)
     {
-        var trashed = await documentRepo.GetTrashedAsync(ct);
-        return Ok200(trashed.Select(MapDocument).ToList());
+        if (!ActorId.HasValue) return Unauthorized();
+        var visibility = await access.GetVisibilityAsync(ActorId.Value, ct);
+        var trashed = await documentRepo.GetTrashedAsync(
+            visibility.Unrestricted ? null : visibility.MaxClassification,
+            visibility.ExplicitlyAllowed, visibility.ExplicitlyDenied, ct);
+
+        // La date de purge est celle que le worker de rétention appliquera.
+        var purgeDays = EAIOS.Api.Infrastructure.BackgroundJobs.RetentionWorker.TrashPurgeDays(configuration);
+        return Ok200(trashed.Select(d => MapDocument(d, purgeDays)).ToList());
     }
 
     /// <summary>Suppression definitive, fichiers du stockage compris.</summary>
@@ -240,6 +314,10 @@ public sealed class DocumentsController(
     [HttpGet("{id:guid}/download")]
     public async Task<IActionResult> Download(Guid id, [FromQuery] Guid? versionId, CancellationToken ct)
     {
+        var readable = await ReadableAsync(id, ct);
+        if (readable == null) return NotFound();
+        await access.RecordReadAsync(readable, "document.downloaded", ct);
+
         try
         {
             var download = await documentService.DownloadAsync(id, versionId, ct);
@@ -299,6 +377,8 @@ public sealed class DocumentsController(
     [HttpGet("{id:guid}/metadata")]
     public async Task<IActionResult> GetMetadata(Guid id, CancellationToken ct)
     {
+        if (await ReadableAsync(id, ct) is null) return NotFound();
+
         try
         {
             var values = await documentService.GetMetadataAsync(id, ct);
@@ -336,6 +416,8 @@ public sealed class DocumentsController(
     [HttpGet("{id:guid}/shares")]
     public async Task<IActionResult> GetShares(Guid id, CancellationToken ct)
     {
+        if (await ReadableAsync(id, ct) is null) return NotFound();
+
         var doc = await documentRepo.GetByIdAsync(id, ct);
         if (doc == null) return NotFound("Document introuvable.");
 
@@ -375,6 +457,8 @@ public sealed class DocumentsController(
     [HttpGet("{id:guid}/legal-holds")]
     public async Task<IActionResult> GetLegalHolds(Guid id, CancellationToken ct)
     {
+        if (await ReadableAsync(id, ct) is null) return NotFound();
+
         var doc = await documentRepo.GetByIdAsync(id, ct);
         if (doc == null) return NotFound("Document introuvable.");
 
@@ -385,10 +469,15 @@ public sealed class DocumentsController(
     }
 
     // ── Mappers ───────────────────────────────────────────────────────────────
-    private static object MapDocument(Document d) => new
+    private static object MapDocument(Document d, int? trashPurgeDays = null) => new
     {
         d.Id, d.Title, d.MimeType, d.Extension, d.FileSizeBytes, d.ResourceType, d.Classification, d.Status,
         d.IndexingStatus, d.FolderId, d.WorkspaceId, d.DepartmentId, d.OwnerId, d.Language, d.Description,
+        d.Tags, d.PageCount, d.VersionCount, d.ViewCount, d.DownloadCount,
+        // Rétention et conservation légale : le domaine les portait, la réponse les taisait.
+        d.RetentionExpiresAt, d.HasLegalHold,
+        PurgeAt = d.Status == ResourceStatus.Trashed && trashPurgeDays.HasValue && !d.HasLegalHold
+            ? d.UpdatedAt.AddDays(trashPurgeDays.Value) : (DateTime?)null,
         d.CreatedAt, d.UpdatedAt
     };
 

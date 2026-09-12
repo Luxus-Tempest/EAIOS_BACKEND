@@ -1,0 +1,8 @@
+bin/
+obj/
+uploads/
+building ressources/
+*.user
+*.md
+.vs/
+.git/

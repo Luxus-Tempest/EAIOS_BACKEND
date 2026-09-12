@@ -46,7 +46,8 @@ public sealed class DocumentService(
     ILegalHoldRepository holdRepo,
     IStorageService storage,
     IAnalyticsTracker analytics,
-    ILogger<DocumentService> logger) : IDocumentService
+    ILogger<DocumentService> logger,
+    EAIOS.Api.Application.Notification.INotificationDispatcher? notifier = null) : IDocumentService
 {
     // ═════════════════════════════════════════════════════════════════════════
     // CYCLE DE VIE
@@ -338,6 +339,13 @@ public sealed class DocumentService(
         await documentRepo.SaveAsync(ct);
 
         logger.LogInformation("Hold légal posé sur le document {DocumentId} — motif : {Reason}", documentId, reason);
+
+        // Le propriétaire doit savoir que son document ne peut plus être supprimé.
+        if (notifier is not null && doc.OwnerId != actorId)
+            await notifier.DispatchAsync(new EAIOS.Api.Application.Notification.NotificationRequest(
+                tenantId, doc.OwnerId, "document.legal_hold",
+                $"Conservation légale : {doc.Title}", $"Motif : {reason}{(caseReference is null ? "" : $" (dossier {caseReference})")}.",
+                $"/documents/{doc.Id}", "Voir le document", Domain.Notification.NotificationPriority.High), ct);
         return hold;
     }
 

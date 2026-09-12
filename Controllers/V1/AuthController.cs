@@ -21,6 +21,7 @@ public sealed class AuthController(
     IInvitationRepository    invitationRepo,
     IMfaCredentialRepository mfaRepo,
     IUserRoleRepository      userRoleRepo,
+    IRoleRepository          roleRepo,
     ITokenService            tokenService,
     IPasswordService         passwordService,
     ITotpService             totpService,
@@ -28,7 +29,8 @@ public sealed class AuthController(
     IEmailService            emailService,
     IAnalyticsTracker        analytics,
     IConfiguration           configuration,
-    ILogger<AuthController>  logger) : V1ApiController
+    ILogger<AuthController>  logger,
+    EAIOS.Api.Application.Notification.INotificationDispatcher notifier) : V1ApiController
 {
     // ═════════════════════════════════════════════════════════════════════════
     // LOGIN / REFRESH / LOGOUT
@@ -231,6 +233,14 @@ public sealed class AuthController(
                 invitation.Role ?? "org.member", invitation.InvitedBy);
             await userRoleRepo.AddAsync(assignment, ct);
             await userRoleRepo.SaveAsync(ct);
+
+            var role = await roleRepo.GetByIdAsync(invitation.RoleId.Value, ct);
+            if (role != null)
+            {
+                role.IncrementUserCount();
+                roleRepo.Update(role);
+                await roleRepo.SaveAsync(ct);
+            }
         }
 
         invitation.Accept(user.Id);
@@ -238,6 +248,12 @@ public sealed class AuthController(
         await invitationRepo.SaveAsync(ct);
 
         await emailService.SendWelcomeAsync(user.Email, user.FirstName, "EAIOS", ct);
+
+        // Celui qui a invité apprend que la personne est arrivée.
+        await notifier.DispatchAsync(new EAIOS.Api.Application.Notification.NotificationRequest(
+            invitation.OrganizationId, invitation.InvitedBy, "invitation.accepted",
+            $"{user.FullName} a rejoint l'organisation", $"Invitation acceptée par {user.Email}.",
+            "/users", "Voir les comptes"), ct);
 
         logger.LogInformation("Nouvel utilisateur inscrit : {Email} ({UserId})", user.Email, user.Id);
 

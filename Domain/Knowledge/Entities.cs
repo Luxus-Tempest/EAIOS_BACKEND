@@ -108,6 +108,19 @@ public sealed class KnowledgeItem : TenantEntity
     public void Archive() => Status = KnowledgeItemStatus.Archived;
     public void SetPack(Guid? packId) => PackId = packId;
     public void IncrementView() => ViewCount++;
+
+    /// <summary>La version de document dont cette fiche est extraite.</summary>
+    public void SetSourceVersion(Guid? versionId) => SourceVersionId = versionId;
+
+    /// <summary>Emplacement, hérité du document source ou choisi à la création.</summary>
+    public void SetLocation(Guid? workspaceId, Guid? departmentId)
+    {
+        WorkspaceId  = workspaceId;
+        DepartmentId = departmentId;
+    }
+
+    /// <summary>Recalcule le score de confiance après une revue ou une réextraction.</summary>
+    public void SetConfidence(float? score) => ConfidenceScore = score;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -215,7 +228,8 @@ public sealed class KnowledgePack : TenantEntity
     public DateTime? LastExportedAt { get; private set; }
     public Guid OwnerId { get; private set; }
 
-    public static KnowledgePack Create(Guid organizationId, string name, Guid ownerId, string? description = null, bool isPublic = false)
+    public static KnowledgePack Create(Guid organizationId, string name, Guid ownerId, string? description = null, bool isPublic = false,
+        string? language = null, string[]? tags = null)
     {
         var pack = new KnowledgePack
         {
@@ -224,16 +238,30 @@ public sealed class KnowledgePack : TenantEntity
             Description = description,
             IsPublic = isPublic,
             Status = KnowledgePackStatus.Draft,
-            OwnerId = ownerId
+            OwnerId = ownerId,
+            Language = string.IsNullOrWhiteSpace(language) ? "fr" : language.Trim().ToLowerInvariant(),
+            Tags = tags ?? []
         };
         pack.SetOrganizationId(organizationId);
         pack.SetCreated(ownerId);
         return pack;
     }
 
+    /// <summary>Un pack publié est le seul dont les fiches sont citables par un agent abonné.</summary>
     public void Publish() => Status = KnowledgePackStatus.Published;
+    /// <summary>Archiver retire les fiches du périmètre des agents sans les supprimer.</summary>
     public void Archive() => Status = KnowledgePackStatus.Archived;
-    public void Update(string? name, string? description, string[]? tags) { if (!string.IsNullOrWhiteSpace(name)) Name = name.Trim(); if (description is not null) Description = description; if (tags is not null) Tags = tags; }
+    public void Update(string? name, string? description, string[]? tags, bool? isPublic = null, string? language = null)
+    {
+        if (!string.IsNullOrWhiteSpace(name)) Name = name.Trim();
+        if (description is not null) Description = description;
+        if (tags is not null) Tags = tags;
+        if (isPublic.HasValue) IsPublic = isPublic.Value;
+        if (!string.IsNullOrWhiteSpace(language)) Language = language.Trim().ToLowerInvariant();
+    }
+    /// <summary>Le compteur suit les affectations ; ce recalcul le remet d'aplomb après une reprise.</summary>
+    public void SetItemCount(int count) => ItemCount = Math.Max(0, count);
     public void IncrementItemCount() => ItemCount++;
+    public void DecrementItemCount() { if (ItemCount > 0) ItemCount--; }
     public void SetExport(string storageKey) { ExportStorageKey = storageKey; LastExportedAt = DateTime.UtcNow; }
 }

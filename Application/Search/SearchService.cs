@@ -1,66 +1,186 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using EAIOS.Api.Domain.Knowledge;
+using EAIOS.Api.Domain.Resource;
 using EAIOS.Api.Domain.Search;
 using EAIOS.Api.Infrastructure.AI;
 using EAIOS.Api.Infrastructure.Analytics;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Knowledge;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Misc;
 using EAIOS.Api.Infrastructure.Persistence.Repositories.Resource;
-using System.Diagnostics;
+using EAIOS.Api.Infrastructure.Security;
 
 namespace EAIOS.Api.Application.Search;
 
 /// <summary>
 /// Recherche hybride sur les documents et la base de connaissance.
 ///
+/// <para>
+/// Deux classements, fusionnés : l'index <b>plein texte</b> de PostgreSQL
+/// (titre, description, texte extrait, contenu des fiches) et la recherche
+/// <b>sémantique</b> du runtime (segments vectorisés, dans le périmètre de la
+/// portée signée). La fusion est une fusion de rangs réciproques : un résultat
+/// bien classé des deux côtés remonte, un résultat que seul un côté connaît
+/// reste visible. C'est ce qui remplace la comparaison de la requête au seul
+/// titre, qui tenait lieu de recherche jusqu'ici.
+/// </para>
+/// <para>
 /// Chaque recherche est tracée dans le journal analytique : c'est cette écriture
-/// qui alimente <c>IAnalyticsQueryService.GetSearchAnalyticsAsync</c> (requêtes
-/// populaires, recherches sans résultat, nombre moyen de résultats).
+/// qui alimente <c>IAnalyticsQueryService.GetSearchAnalyticsAsync</c>.
+/// </para>
 /// </summary>
 public sealed class SearchService(
     ISavedSearchRepository savedSearchRepo,
     IDocumentRepository documentRepo,
     IKnowledgeItemRepository knowledgeRepo,
     IAnalyticsTracker analytics,
-    ILlmService llm) : ISearchService
+    EAIOS.Api.Application.Knowledge.IKnowledgeService knowledge,
+    IAgentContextService contextService,
+    IAgentRuntimeClient runtime,
+    IHttpContextAccessor httpContextAccessor,
+    EAIOS.Api.Application.Resource.IDocumentAccessService access,
+    ILogger<SearchService> logger) : ISearchService
 {
-    private const float DocumentBaseScore  = 0.80f;
-    private const float KnowledgeBaseScore = 0.75f;
+    /// <summary>Constante de la fusion de rangs réciproques : 60 est la valeur de la littérature.</summary>
+    private const int RrfK = 60;
+
+    /// <summary>Profondeur de chaque classement avant fusion.</summary>
+    private const int Depth = 60;
 
     public async Task<object> SearchAsync(Guid tenantId, Guid actorId, SearchRequest req, CancellationToken ct = default)
     {
         var stopwatch = Stopwatch.StartNew();
+        var query = req.Query?.Trim() ?? "";
 
-        var docQuery = new DocumentQuery(req.Query,
-            WorkspaceId: req.Filters?.WorkspaceId, Page: req.Page, PageSize: req.PageSize);
+        // ── 1. Plein texte, dans ce que la personne peut voir ─────────────────
+        var visibility = await access.GetVisibilityAsync(actorId, ct);
+        var ceiling = visibility.Unrestricted ? (ResourceClassification?)null : visibility.MaxClassification;
+        var docs  = await documentRepo.FullTextSearchAsync(query, req.Filters?.WorkspaceId, req.Filters?.Classification, Depth,
+            ceiling, visibility.ExplicitlyAllowed, visibility.ExplicitlyDenied, ct);
+        var items = await knowledgeRepo.FullTextSearchAsync(query, KnowledgeItemStatus.Published, Depth, ct, ceiling);
 
-        var docs  = await documentRepo.SearchAsync(docQuery, ct);
-        var items = await knowledgeRepo.SearchAsync(
-            req.Query, null, Domain.Knowledge.KnowledgeItemStatus.Published, null, req.Page, req.PageSize, ct);
+        // ── 2. Sémantique, dans le périmètre de la personne ───────────────────
+        var semantic = Array.Empty<RuntimeSearchHit>() as IReadOnlyList<RuntimeSearchHit>;
+        var mode = "hybrid";
+        if (req.Type != SearchType.Basic && query.Length > 0)
+        {
+            try
+            {
+                var context = contextService.IssueForAssistant(tenantId, actorId, [], Guid.CreateVersion7());
+                semantic = await runtime.SearchAsync(context.Token, CallerToken(), query, Depth, ct);
+            }
+            catch (Exception ex) when (ex is AgentRuntimeUnavailableException or InvalidOperationException)
+            {
+                // La recherche reste utile sans vecteurs, mais elle le dit.
+                logger.LogWarning(ex, "Runtime injoignable : recherche lexicale seule.");
+                mode = "lexical-degraded";
+            }
+        }
+        else
+        {
+            mode = "lexical";
+        }
 
-        var results = new List<SearchHit>(docs.Items.Count + items.Items.Count);
+        // ── 3. Fusion ─────────────────────────────────────────────────────────
+        var fused = new Dictionary<string, Fused>();
 
-        results.AddRange(docs.Items.Select(d => new SearchHit(
-            Id:        d.Id,
-            Type:      "document",
-            Title:     d.Title,
-            Summary:   string.IsNullOrWhiteSpace(d.Description) ? $"Document • {d.MimeType}" : d.Description,
-            CreatedAt: d.CreatedAt,
-            Score:     ScoreFor(req.Query, d.Title, DocumentBaseScore))));
+        void Vote(string key, int rank, Func<Fused> create, Action<Fused>? enrich = null)
+        {
+            if (!fused.TryGetValue(key, out var entry))
+                fused[key] = entry = create();
+            entry.Score += 1.0 / (RrfK + rank);
+            enrich?.Invoke(entry);
+        }
 
-        results.AddRange(items.Items.Select(k => new SearchHit(
-            Id:        k.Id,
-            Type:      "knowledge",
-            Title:     k.Title,
-            Summary:   string.IsNullOrWhiteSpace(k.Summary) ? $"Connaissance • {k.Type}" : k.Summary,
-            CreatedAt: k.CreatedAt,
-            Score:     ScoreFor(req.Query, k.Title, KnowledgeBaseScore))));
+        for (var i = 0; i < docs.Count; i++)
+        {
+            var d = docs[i];
+            Vote($"document:{d.Id}", i + 1, () => new Fused(d.Id, "document", d.Title, d.CreatedAt)
+            {
+                Summary = Excerpt(query, d.Description, d.ExtractedText),
+                Classification = d.Classification.ToString(),
+                MimeType = d.MimeType,
+                DocumentId = d.Id,
+                Lexical = true,
+            });
+        }
 
-        var ranked = results
-            .OrderByDescending(r => r.Score)
-            .ThenByDescending(r => r.CreatedAt)
+        for (var i = 0; i < items.Count; i++)
+        {
+            var k = items[i];
+            var key = k.SourceDocumentId is { } sourceId && k.Source == KnowledgeItemSource.AutoExtracted
+                ? $"document:{sourceId}"
+                : $"knowledge:{k.Id}";
+            Vote(key, i + 1, () => new Fused(k.SourceDocumentId ?? k.Id, k.SourceDocumentId is null ? "knowledge" : "document", k.Title, k.CreatedAt)
+            {
+                Summary = Excerpt(query, k.Summary, k.Content),
+                DocumentId = k.SourceDocumentId,
+                KnowledgeItemId = k.Id,
+                Lexical = true,
+            }, entry =>
+            {
+                entry.KnowledgeItemId ??= k.Id;
+                entry.Summary ??= Excerpt(query, k.Summary, k.Content);
+            });
+        }
+
+        for (var i = 0; i < semantic.Count; i++)
+        {
+            var hit = semantic[i];
+            var key = hit.DocumentId is { } docId ? $"document:{docId}" : $"knowledge:{hit.ItemId}";
+            if (hit.ItemId is null && hit.DocumentId is null) continue;
+
+            Vote(key, i + 1, () => new Fused(hit.DocumentId ?? hit.ItemId!.Value, hit.DocumentId is null ? "knowledge" : "document", hit.Title, DateTime.UtcNow)
+            {
+                Summary = hit.Excerpt,
+                DocumentId = hit.DocumentId,
+                KnowledgeItemId = hit.ItemId,
+                Page = hit.Page,
+                Reference = hit.Reference,
+                Semantic = true,
+            }, entry =>
+            {
+                // L'extrait sémantique dit *où* la requête a été comprise :
+                // il prime sur un début de description.
+                entry.Semantic = true;
+                entry.Page ??= hit.Page;
+                entry.Reference ??= hit.Reference;
+                if (!string.IsNullOrWhiteSpace(hit.Excerpt)) entry.Summary = hit.Excerpt;
+            });
+        }
+
+        var ranked = fused.Values.OrderByDescending(f => f.Score).ThenByDescending(f => f.CreatedAt).ToList();
+        var maxScore = ranked.Count > 0 ? ranked[0].Score : 1.0;
+
+        var total = ranked.Count;
+        var page = ranked
+            .Skip((req.Page - 1) * req.PageSize)
             .Take(req.PageSize)
+            .Select(f => new SearchHit(
+                Id: f.Id,
+                Type: f.Type,
+                Title: f.Title,
+                Summary: f.Summary,
+                CreatedAt: f.CreatedAt,
+                // Score normalisé sur le premier résultat : lisible comme une pertinence relative.
+                Score: (float)Math.Round(f.Score / maxScore, 3),
+                Page: f.Page,
+                Reference: f.Reference,
+                DocumentId: f.DocumentId,
+                KnowledgeItemId: f.KnowledgeItemId,
+                Classification: f.Classification,
+                MimeType: f.MimeType,
+                MatchedBy: f.Lexical && f.Semantic ? "both" : f.Semantic ? "semantic" : "lexical"))
             .ToList();
 
-        var total = docs.TotalCount + items.TotalCount;
+        // ── 4. Facettes, sur l'ensemble fusionné ──────────────────────────────
+        var facets = new Dictionary<string, IReadOnlyList<FacetValue>>
+        {
+            ["type"] = ranked.GroupBy(f => f.Type).Select(g => new FacetValue(g.Key, g.Count())).ToList(),
+            ["classification"] = ranked.Where(f => f.Classification is not null)
+                .GroupBy(f => f.Classification!).Select(g => new FacetValue(g.Key, g.Count())).ToList(),
+        };
+
         stopwatch.Stop();
 
         // Une recherche sans résultat est tracée séparément : elle révèle un
@@ -71,21 +191,24 @@ public sealed class SearchService(
             durationMs:   stopwatch.ElapsedMilliseconds,
             properties: new
             {
-                query       = req.Query,
+                query,
                 resultCount = total,
-                topScore    = ranked.Count > 0 ? ranked[0].Score : 0f,
-                page        = req.Page
+                topScore    = page.Count > 0 ? page[0].Score : 0f,
+                page        = req.Page,
+                mode
             },
             workspaceId: req.Filters?.WorkspaceId,
             ct: ct);
 
         return new
         {
-            Items      = ranked,
+            Items      = page,
             TotalCount = total,
             Page       = req.Page,
             PageSize   = req.PageSize,
-            TookMs     = stopwatch.ElapsedMilliseconds
+            TookMs     = stopwatch.ElapsedMilliseconds,
+            Mode       = mode,
+            Facets     = facets
         };
     }
 
@@ -105,25 +228,19 @@ public sealed class SearchService(
             .ToList();
     }
 
+    /// <summary>
+    /// Question posée depuis la recherche.
+    ///
+    /// <para>
+    /// Délègue au <b>même</b> chemin que <c>/knowledge/ask</c>. Il n'existe
+    /// qu'une seule façon de répondre à une question documentaire, et la forme
+    /// de la réponse est préservée pour ne rien casser côté frontend.
+    /// </para>
+    /// </summary>
     public async Task<object> AskAsync(Guid tenantId, Guid actorId, AskRequest req, CancellationToken ct = default)
     {
         var stopwatch = Stopwatch.StartNew();
-
-        var items = await knowledgeRepo.SearchAsync(
-            req.Question, null, Domain.Knowledge.KnowledgeItemStatus.Published, null, 1, 5, ct);
-
-        var context = string.Join("\n\n---\n\n", items.Items.Select(i => $"### {i.Title}\n{i.Content}"));
-
-        var systemPrompt = $"""
-            Tu es EAIOS, un assistant IA enterprise intelligent.
-            Tu réponds EN FRANÇAIS uniquement sur la base du contexte fourni.
-            Si la réponse n'est pas disponible, dis-le clairement.
-
-            CONTEXTE DISPONIBLE:
-            {(string.IsNullOrWhiteSpace(context) ? "Aucun contexte disponible." : context)}
-            """;
-
-        var result = await llm.GenerateAsync(systemPrompt, req.Question, null, ct);
+        var answer = await knowledge.AskAsync(req.Question, packId: null, ct);
         stopwatch.Stop();
 
         await analytics.TrackAsync(AnalyticsEventTypes.SearchAsked,
@@ -132,17 +249,27 @@ public sealed class SearchService(
             properties: new
             {
                 query       = req.Question,
-                resultCount = items.Items.Count,
-                model       = result.ModelUsed,
-                tokens      = result.TotalTokens
+                resultCount = answer.Sources.Count,
+                mode        = answer.RetrievalMode,
+                tokens      = answer.PromptTokens + answer.CompletionTokens
             },
             ct: ct);
 
         return new
         {
-            Answer   = result.Output,
-            Sources  = items.Items.Select(i => new { i.Id, i.Title, i.Type }),
-            Metadata = new { result.PromptTokens, result.CompletionTokens, result.ModelUsed, TookMs = stopwatch.ElapsedMilliseconds }
+            answer.Answer,
+            Sources  = answer.Sources.Select(s => new { s.Id, s.Title, s.Type }),
+            // Les citations arrivent en plus : la forme historique est intacte,
+            // les consommateurs existants ne voient aucun changement.
+            answer.Citations,
+            answer.Unresolved,
+            Metadata = new
+            {
+                answer.PromptTokens,
+                answer.CompletionTokens,
+                answer.RetrievalMode,
+                TookMs = stopwatch.ElapsedMilliseconds
+            }
         };
     }
 
@@ -170,33 +297,62 @@ public sealed class SearchService(
         await savedSearchRepo.SaveAsync(ct);
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     /// <summary>
-    /// Score de pertinence lexical simple : un titre qui contient la requête entière
-    /// prime sur une correspondance partielle. Suffisant pour un tri stable en attendant
-    /// un moteur vectoriel ; sans cela tous les résultats d'un même type étaient ex aequo.
+    /// Un extrait autour de la première occurrence d'un terme de la requête,
+    /// sinon le début du texte. Sans texte, la description ; sans rien, null.
     /// </summary>
-    private static float ScoreFor(string? query, string? title, float baseScore)
+    private static string? Excerpt(string query, string? description, string? text)
     {
-        if (string.IsNullOrWhiteSpace(query) || string.IsNullOrWhiteSpace(title))
-            return baseScore;
+        var body = string.IsNullOrWhiteSpace(text) ? description : text;
+        if (string.IsNullOrWhiteSpace(body)) return description;
 
-        var q = query.Trim();
+        var flat = Regex.Replace(body, @"\s+", " ").Trim();
+        var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => t.Length > 2).ToList();
 
-        if (title.Equals(q, StringComparison.OrdinalIgnoreCase))
-            return Math.Min(1f, baseScore + 0.20f);
+        var at = -1;
+        foreach (var term in terms)
+        {
+            at = flat.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+            if (at >= 0) break;
+        }
 
-        if (title.StartsWith(q, StringComparison.OrdinalIgnoreCase))
-            return Math.Min(1f, baseScore + 0.12f);
+        const int window = 220;
+        if (at < 0) return flat.Length <= window ? flat : flat[..window].TrimEnd() + "…";
 
-        if (title.Contains(q, StringComparison.OrdinalIgnoreCase))
-            return Math.Min(1f, baseScore + 0.06f);
+        var start = Math.Max(0, at - window / 3);
+        var end = Math.Min(flat.Length, start + window);
+        var slice = flat[start..end].Trim();
+        return (start > 0 ? "…" : "") + slice + (end < flat.Length ? "…" : "");
+    }
 
-        // Correspondance partielle : proportion des termes de la requête présents dans le titre.
-        var terms = q.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (terms.Length == 0) return baseScore;
+    private string CallerToken()
+    {
+        var header = httpContextAccessor.HttpContext?.Request.Headers.Authorization.ToString();
+        if (string.IsNullOrWhiteSpace(header) || !header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("MISSING_CALLER_TOKEN");
 
-        var hits = terms.Count(t => title.Contains(t, StringComparison.OrdinalIgnoreCase));
-        return baseScore + 0.06f * ((float)hits / terms.Length);
+        return header["Bearer ".Length..].Trim();
+    }
+
+    private sealed class Fused(Guid id, string type, string title, DateTime createdAt)
+    {
+        public Guid Id { get; } = id;
+        public string Type { get; } = type;
+        public string Title { get; } = title;
+        public DateTime CreatedAt { get; } = createdAt;
+        public double Score { get; set; }
+        public string? Summary { get; set; }
+        public string? Classification { get; set; }
+        public string? MimeType { get; set; }
+        public Guid? DocumentId { get; set; }
+        public Guid? KnowledgeItemId { get; set; }
+        public int? Page { get; set; }
+        public string? Reference { get; set; }
+        public bool Lexical { get; set; }
+        public bool Semantic { get; set; }
     }
 }
 
@@ -207,4 +363,12 @@ public sealed record SearchHit(
     string Title,
     string? Summary,
     DateTime CreatedAt,
-    float Score);
+    float Score,
+    int? Page = null,
+    string? Reference = null,
+    Guid? DocumentId = null,
+    Guid? KnowledgeItemId = null,
+    string? Classification = null,
+    string? MimeType = null,
+    /// <summary>« lexical », « semantic » ou « both » : ce qui a fait remonter le résultat.</summary>
+    string MatchedBy = "lexical");

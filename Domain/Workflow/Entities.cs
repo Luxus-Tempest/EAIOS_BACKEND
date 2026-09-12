@@ -35,6 +35,12 @@ public sealed class WorkflowDefinition : TenantEntity
     public int ExecutionCount { get; private set; }
     public string? GraphJson { get; private set; }  // Draft graph (nodes + edges)
 
+    // ── Planification ──────────────────────────────────────────────────────────
+    /// <summary>Expression cron à cinq champs ; vide pour un workflow lancé à la main.</summary>
+    public string? ScheduleCron { get; private set; }
+    /// <summary>Prochaine échéance calculée. Le planificateur lance et recalcule.</summary>
+    public DateTime? NextRunAt { get; private set; }
+
     // ── Relations ──────────────────────────────────────────────────────────────
     public IReadOnlyList<WorkflowDefinitionVersion> DefinitionVersions { get; private set; } = new List<WorkflowDefinitionVersion>();
     public IReadOnlyList<WorkflowInstance> Instances { get; private set; } = new List<WorkflowInstance>();
@@ -77,6 +83,13 @@ public sealed class WorkflowDefinition : TenantEntity
     }
 
     public void IncrementExecutionCount() => ExecutionCount++;
+
+    /// <summary>Pose ou lève l'horaire. La prochaine échéance est calculée par l'appelant.</summary>
+    public void SetSchedule(string? cron, DateTime? nextRunAt)
+    {
+        ScheduleCron = string.IsNullOrWhiteSpace(cron) ? null : cron.Trim();
+        NextRunAt    = ScheduleCron is null ? null : nextRunAt;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -167,6 +180,8 @@ public sealed class WorkflowInstance : TenantEntity
     public void Complete() { Status = WorkflowInstanceStatus.Completed; CompletedAt = DateTime.UtcNow; }
     public void Fail(string error) { Status = WorkflowInstanceStatus.Failed; CompletedAt = DateTime.UtcNow; ErrorMessage = error; }
     public void Cancel() { Status = WorkflowInstanceStatus.Cancelled; CompletedAt = DateTime.UtcNow; }
+    /// <summary>L'échéance est passée sans aboutir : le planificateur clôt l'instance.</summary>
+    public void TimeOut() { Status = WorkflowInstanceStatus.TimedOut; CompletedAt = DateTime.UtcNow; ErrorMessage ??= "Échéance dépassée."; }
     public void UpdateVariables(string variablesJson) => VariablesJson = variablesJson;
 }
 
@@ -177,7 +192,26 @@ public sealed class WorkflowInstance : TenantEntity
 
 public sealed class WorkflowTask : TenantEntity
 {
-    public Guid InstanceId { get; private set; }
+    /// <summary>
+    /// Instance de workflow dont la tâche est issue, s'il y en a une.
+    ///
+    /// <para>
+    /// Nullable, parce qu'une tâche humaine n'a pas toujours un workflow derrière
+    /// elle : un agent qui s'arrête pour demander une décision en produit une, et
+    /// il n'exécute aucune instance. Exactement une des deux origines est
+    /// renseignée — <see cref="InstanceId"/> ou <see cref="AgentExecutionId"/>.
+    /// </para>
+    /// </summary>
+    public Guid? InstanceId { get; private set; }
+
+    /// <summary>
+    /// Exécution d'agent dont la tâche est issue, s'il y en a une.
+    ///
+    /// C'est ce lien qui permet de reprendre l'exécution une fois la décision
+    /// rendue : sans lui, une tâche approuvée resterait sans effet.
+    /// </summary>
+    public Guid? AgentExecutionId { get; private set; }
+
     public string StepId { get; private set; } = string.Empty;
     public string TaskType { get; private set; } = string.Empty;  // Approval, Review, DataInput
     public string Title { get; private set; } = string.Empty;
@@ -217,6 +251,56 @@ public sealed class WorkflowTask : TenantEntity
         return task;
     }
 
+    /// <summary>
+    /// Tâche née d'un agent qui s'est arrêté pour demander une décision.
+    ///
+    /// <para>
+    /// <paramref name="instructions"/> et <paramref name="formDataJson"/> reprennent
+    /// la charge utile de l'arrêt telle que le runtime l'a produite : la question,
+    /// les options et les preuves. Rien n'est deviné ici — c'est ce qui permet à
+    /// l'écran d'approbation de montrer de quoi juger sans rouvrir la conversation.
+    /// </para>
+    /// </summary>
+    public static WorkflowTask ForAgentDecision(
+        Guid organizationId,
+        Guid? agentExecutionId,
+        string taskType,
+        string title,
+        string? instructions,
+        Guid? assigneeId,
+        string? formDataJson = null,
+        DateTime? dueAt = null)
+    {
+        var task = new WorkflowTask
+        {
+            Id = Guid.CreateVersion7(),
+            InstanceId = null,
+            // `null` et non `Guid.Empty` : une tâche ouverte hors arrêt n'a
+            // aucune exécution à reprendre, et `CompleteTaskAsync` s'appuie sur
+            // cette absence pour ne pas essayer.
+            AgentExecutionId = agentExecutionId,
+            // L'exécution *est* l'étape quand il y en a une ; sinon la tâche se
+            // suffit à elle-même.
+            StepId = agentExecutionId.HasValue ? "agent-decision" : "standalone",
+            TaskType = taskType,
+            Title = title,
+            Instructions = instructions,
+            AssigneeType = assigneeId.HasValue
+                ? WorkflowTaskAssigneeType.User
+                // Sans destinataire connu, la tâche revient à l'organisation
+                // plutôt qu'à personne : une décision sans assignataire ne doit
+                // pas disparaître de toutes les files.
+                : WorkflowTaskAssigneeType.Workspace,
+            AssigneeId = assigneeId,
+            Status = WorkflowTaskStatus.Open,
+            FormDataJson = formDataJson,
+            DueAt = dueAt
+        };
+        task.SetOrganizationId(organizationId);
+        task.SetCreated(null);
+        return task;
+    }
+
     public void Complete(Guid completedBy, string decision, string? comment, string? formDataJson)
     {
         Status = WorkflowTaskStatus.Completed;
@@ -243,4 +327,6 @@ public sealed class WorkflowTask : TenantEntity
     }
 
     public void Cancel() { Status = WorkflowTaskStatus.Cancelled; }
+    /// <summary>Non traitée même après escalade : la tâche expire.</summary>
+    public void Expire() { Status = WorkflowTaskStatus.Expired; CompletedAt = DateTime.UtcNow; }
 }

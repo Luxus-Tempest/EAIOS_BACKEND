@@ -171,7 +171,6 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.AccessControl.ResourceAcl", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
@@ -186,8 +185,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("DeletedBy")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("Effect")
-                        .HasColumnType("integer");
+                    b.Property<string>("Effect")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
@@ -208,8 +209,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("PrincipalId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("PrincipalType")
-                        .HasColumnType("integer");
+                    b.Property<string>("PrincipalType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<Guid>("ResourceId")
                         .HasColumnType("uuid");
@@ -232,7 +235,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("ResourceAcls");
+                    b.HasIndex("ResourceId", "PrincipalId");
+
+                    b.ToTable("resource_acls", "acl");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.AccessControl.Role", b =>
@@ -465,6 +470,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<string>("SubAgentsJson")
+                        .HasColumnType("text");
+
                     b.Property<string>("SystemPrompt")
                         .HasColumnType("text");
 
@@ -512,6 +520,78 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.HasIndex("OrganizationId", "Status");
 
                     b.ToTable("agents", "agent");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentConversation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPinned")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("LastActivityAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("LastExecutionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("LastStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int>("TurnCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId", "LastActivityAt");
+
+                    b.HasIndex("UserId", "LastActivityAt");
+
+                    b.ToTable("conversations", "agent");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentExecution", b =>
@@ -637,7 +717,6 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentMemory", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<int>("AccessCount")
@@ -676,7 +755,8 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Key")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<DateTime?>("LastAccessedAt")
                         .HasColumnType("timestamp with time zone");
@@ -690,8 +770,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<string>("QdrantPointId")
                         .HasColumnType("text");
 
-                    b.Property<int>("Type")
-                        .HasColumnType("integer");
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -710,13 +792,241 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("AgentMemories");
+                    b.HasIndex("AgentId", "UserId", "Type", "Key");
+
+                    b.ToTable("memories", "agent");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentTestCase", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid");
+
+                    b.PrimitiveCollection<string[]>("ExpectedPhrases")
+                        .IsRequired()
+                        .HasColumnType("text[]");
+
+                    b.PrimitiveCollection<string[]>("ForbiddenPhrases")
+                        .IsRequired()
+                        .HasColumnType("text[]");
+
+                    b.Property<string>("Input")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("RequiresCitation")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId", "IsEnabled");
+
+                    b.ToTable("test_cases", "agent");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentTestResult", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("CitationCount")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("CostUsd")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ExecutionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("LatencyMs")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Output")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("Passed")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TestCaseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TotalTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId", "Passed");
+
+                    b.ToTable("test_results", "agent");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentTestRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AgentVersion")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("text");
+
+                    b.Property<int>("FailedCases")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("MedianLatencyMs")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("P95LatencyMs")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PassedCases")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<int>("TotalCases")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("TotalCostUsd")
+                        .HasColumnType("numeric");
+
+                    b.Property<int>("TotalTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TriggeredBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId", "StartedAt");
+
+                    b.ToTable("test_runs", "agent");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentVersion", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<Guid>("AgentId")
@@ -770,15 +1080,15 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AgentId");
+                    b.HasIndex("AgentId", "VersionNumber")
+                        .IsUnique();
 
-                    b.ToTable("AgentVersions");
+                    b.ToTable("versions", "agent");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Agent.PromptTemplate", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<string>("Content")
@@ -811,7 +1121,8 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
@@ -819,8 +1130,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("ParentTemplateId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("Role")
-                        .HasColumnType("integer");
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -833,14 +1146,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .HasColumnType("text[]");
 
                     b.Property<string>("Version")
-                        .IsConcurrencyToken()
                         .IsRequired()
-                        .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("text");
 
                     b.HasKey("Id");
 
-                    b.ToTable("PromptTemplates");
+                    b.ToTable("prompt_templates", "agent");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Analytics.AnalyticsEvent", b =>
@@ -1042,14 +1353,17 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Connector.ConnectorDefinition", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<int>("AuthType")
-                        .HasColumnType("integer");
+                    b.Property<string>("AuthType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
-                    b.Property<int>("Category")
-                        .HasColumnType("integer");
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -1065,7 +1379,8 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("SchemaJson")
                         .IsRequired()
@@ -1088,7 +1403,7 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("ConnectorDefinitions");
+                    b.ToTable("connector_definitions", "platform");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Connector.ConnectorInstance", b =>
@@ -1948,7 +2263,6 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Knowledge.KnowledgePack", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<string>("CoverImageUrl")
@@ -1990,7 +2304,8 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
@@ -1998,8 +2313,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid>("OwnerId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.PrimitiveCollection<string[]>("Tags")
                         .IsRequired()
@@ -2019,13 +2336,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("KnowledgePacks");
+                    b.ToTable("packs", "knowledge");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Knowledge.KnowledgeRelation", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<float?>("ConfidenceScore")
@@ -2057,10 +2373,13 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("RelationType")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
 
-                    b.Property<int>("Source")
-                        .HasColumnType("integer");
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<Guid>("SourceItemId")
                         .HasColumnType("uuid");
@@ -2084,7 +2403,11 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasIndex("KnowledgeItemId");
 
-                    b.ToTable("KnowledgeRelations");
+                    b.HasIndex("SourceItemId");
+
+                    b.HasIndex("TargetItemId");
+
+                    b.ToTable("relations", "knowledge");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Notification.Notification", b =>
@@ -2195,15 +2518,16 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Notification.NotificationTemplate", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<string>("BodyTemplate")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<int>("Channel")
-                        .HasColumnType("integer");
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -2262,7 +2586,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("NotificationTemplates");
+                    b.HasIndex("EventType", "Channel", "Language");
+
+                    b.ToTable("templates", "notification");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Organization.Department", b =>
@@ -2630,7 +2956,6 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Resource.DocumentShare", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<int>("AccessCount")
@@ -2666,8 +2991,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("Permission")
-                        .HasColumnType("integer");
+                    b.Property<string>("Permission")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<string>("PublicLinkToken")
                         .HasColumnType("text");
@@ -2681,8 +3008,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("TargetId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("TargetType")
-                        .HasColumnType("integer");
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -2698,15 +3027,14 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DocumentId");
+                    b.HasIndex("DocumentId", "TargetId");
 
-                    b.ToTable("DocumentShares");
+                    b.ToTable("document_shares", "resource");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Resource.DocumentVersion", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<string>("ChangeNote")
@@ -2771,8 +3099,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<string>("PreviewStorageKey")
                         .HasColumnType("text");
 
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<string>("StorageKey")
                         .IsRequired()
@@ -2807,9 +3137,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DocumentId");
+                    b.HasIndex("DocumentId", "VersionNumber");
 
-                    b.ToTable("DocumentVersions");
+                    b.ToTable("document_versions", "resource");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Resource.Folder", b =>
@@ -2902,7 +3232,6 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Resource.LegalHold", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<string>("CaseReference")
@@ -2948,8 +3277,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid?>("ReleasedBy")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -2965,13 +3296,14 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("LegalHolds");
+                    b.HasIndex("DocumentId", "Status");
+
+                    b.ToTable("legal_holds", "resource");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Resource.MetadataTemplate", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.PrimitiveCollection<string[]>("ApplicableResourceTypes")
@@ -3008,7 +3340,8 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
@@ -3027,13 +3360,12 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("MetadataTemplates");
+                    b.ToTable("metadata_templates", "resource");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Resource.MetadataValue", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
@@ -3090,13 +3422,14 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasIndex("DocumentId");
 
-                    b.ToTable("MetadataValues");
+                    b.HasIndex("ResourceId", "TemplateId");
+
+                    b.ToTable("metadata_values", "resource");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Search.Embedding", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<Guid?>("ChunkId")
@@ -3169,13 +3502,16 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("Embeddings");
+                    b.HasIndex("ChunkId");
+
+                    b.HasIndex("SourceType", "SourceId");
+
+                    b.ToTable("embeddings", "search");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Search.SavedSearch", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<bool>("AlertEnabled")
@@ -3214,7 +3550,8 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
@@ -3223,8 +3560,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<int>("SearchType")
-                        .HasColumnType("integer");
+                    b.Property<string>("SearchType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -3246,13 +3585,14 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("SavedSearches");
+                    b.HasIndex("UserId");
+
+                    b.ToTable("saved_searches", "search");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Webhook.WebhookSubscription", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
@@ -3314,7 +3654,7 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.ToTable("WebhookSubscriptions");
+                    b.ToTable("subscriptions", "webhook");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Workflow.WorkflowDefinition", b =>
@@ -3367,6 +3707,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .HasMaxLength(300)
                         .HasColumnType("character varying(300)");
 
+                    b.Property<DateTime?>("NextRunAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("OrganizationId")
                         .HasColumnType("uuid");
 
@@ -3375,6 +3718,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.Property<Guid?>("PublishedVersionId")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("ScheduleCron")
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -3392,9 +3738,7 @@ namespace EAIOS.Api.Migrations.EaiosDb
                         .HasColumnType("uuid");
 
                     b.Property<string>("Version")
-                        .IsConcurrencyToken()
                         .IsRequired()
-                        .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("text");
 
                     b.Property<int>("VersionNumber")
@@ -3411,7 +3755,6 @@ namespace EAIOS.Api.Migrations.EaiosDb
             modelBuilder.Entity("EAIOS.Api.Domain.Workflow.WorkflowDefinitionVersion", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
                     b.Property<string>("ChangeLog")
@@ -3469,9 +3812,10 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DefinitionId");
+                    b.HasIndex("DefinitionId", "VersionNumber")
+                        .IsUnique();
 
-                    b.ToTable("WorkflowDefinitionVersions");
+                    b.ToTable("definition_versions", "workflow");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Workflow.WorkflowInstance", b =>
@@ -3574,6 +3918,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("AgentExecutionId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("AssignedGroupId")
                         .HasColumnType("uuid");
 
@@ -3624,7 +3971,7 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Property<string>("FormDataJson")
                         .HasColumnType("text");
 
-                    b.Property<Guid>("InstanceId")
+                    b.Property<Guid?>("InstanceId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("Instructions")
@@ -3668,6 +4015,9 @@ namespace EAIOS.Api.Migrations.EaiosDb
 
                     b.HasKey("Id");
 
+                    b.HasIndex("AgentExecutionId")
+                        .HasFilter("\"AgentExecutionId\" IS NOT NULL");
+
                     b.HasIndex("DueAt");
 
                     b.HasIndex("InstanceId");
@@ -3682,6 +4032,15 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.HasOne("EAIOS.Api.Domain.Agent.Agent", null)
                         .WithMany("Executions")
                         .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentTestResult", b =>
+                {
+                    b.HasOne("EAIOS.Api.Domain.Agent.AgentTestRun", null)
+                        .WithMany("Results")
+                        .HasForeignKey("RunId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -3792,9 +4151,7 @@ namespace EAIOS.Api.Migrations.EaiosDb
                 {
                     b.HasOne("EAIOS.Api.Domain.Workflow.WorkflowInstance", null)
                         .WithMany("Tasks")
-                        .HasForeignKey("InstanceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .HasForeignKey("InstanceId");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Agent.Agent", b =>
@@ -3802,6 +4159,11 @@ namespace EAIOS.Api.Migrations.EaiosDb
                     b.Navigation("Executions");
 
                     b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("EAIOS.Api.Domain.Agent.AgentTestRun", b =>
+                {
+                    b.Navigation("Results");
                 });
 
             modelBuilder.Entity("EAIOS.Api.Domain.Connector.ConnectorInstance", b =>

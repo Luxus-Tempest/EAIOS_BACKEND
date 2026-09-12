@@ -105,15 +105,31 @@ public sealed record CreateWorkflowDefinitionRequest(
     string NodesJson = "[]",
     string EdgesJson = "[]",
     EAIOS.Api.Domain.Workflow.WorkflowTriggerType TriggerType = EAIOS.Api.Domain.Workflow.WorkflowTriggerType.Manual,
-    string? TriggerConfig = null);
+    string? TriggerConfig = null,
+    /// <summary>Expression cron à cinq champs (« 0 8 * * 1 ») ; vide pour un lancement manuel.</summary>
+    string? ScheduleCron = null);
 
 public sealed record UpdateWorkflowDefinitionRequest(
     string? Name = null,
     string? Description = null,
     string? Category = null,
     string? NodesJson = null,
-    string? EdgesJson = null);
+    string? EdgesJson = null,
+    string? ScheduleCron = null,
+    /// <summary>Vrai pour lever l'horaire : <c>ScheduleCron</c> absent veut dire « inchangé ».</summary>
+    bool ClearSchedule = false);
 
 
 
 public sealed record CancelWorkflowRequest(string? Reason = null);
+
+/// <summary>
+/// Ouverture d'une tache humaine autonome, hors instance de workflow.
+/// Sert l'outil `create_task` du runtime d'agents.
+/// </summary>
+public sealed record CreateWorkflowTaskRequest(
+    string Title,
+    string? Instructions = null,
+    string? TaskType = null,
+    Guid? AssigneeId = null,
+    DateTime? DueAt = null);

@@ -6,7 +6,11 @@ namespace EAIOS.Api.Domain.Agent;
 // ENUMS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-public enum AgentType { Rag, Conversational, TaskAutomation, DataAnalysis, Custom }
+// `Orchestrator` est ajoute en fin d'enumeration : le design le montre
+// (« Orchestrateur d'instruction · Running · etape 4/7 ») et le runtime le
+// branche sur un superviseur. La valeur est persistee en chaine, donc l'ajout ne
+// demande aucune conversion des lignes existantes.
+public enum AgentType { Rag, Conversational, TaskAutomation, DataAnalysis, Custom, Orchestrator }
 public enum AgentStatus { Draft, Published, Deprecated, Archived }
 public enum AgentVisibility { Private, Workspace, Organization, Public }
 public enum AgentExecutionStatus { Queued, Running, AwaitingHumanInput, Completed, Failed, Cancelled, TimedOut }
@@ -60,12 +64,39 @@ public sealed class Agent : TenantEntity
     // ── Tools ──────────────────────────────────────────────────────────────────
     public string[] EnabledTools { get; private set; } = [];
 
+    /// <summary>
+    /// Sous-agents d'un orchestrateur, en JSON : <c>[{"AgentId":…, "Version":"published"}]</c>.
+    ///
+    /// <para>
+    /// Un orchestrateur delegue a des agents <b>publies</b>, dans une version
+    /// figee : son comportement ne doit pas changer parce qu'un collegue a
+    /// modifie un agent delegue entre-temps. Le runtime les monte comme outils.
+    /// </para>
+    /// <para>
+    /// Vide pour tout autre type. La delegation est limitee a un niveau : un
+    /// orchestrateur qui deleguerait a un orchestrateur ouvrirait une recursion
+    /// dont le budget ne serait plus lisible.
+    /// </para>
+    /// </summary>
+    public string? SubAgentsJson { get; private set; }
+
     // ── Scoping ────────────────────────────────────────────────────────────────
     public Guid? WorkspaceId { get; private set; }
     public Guid? DepartmentId { get; private set; }
 
     // ── Behaviour ──────────────────────────────────────────────────────────────
-    public bool RequireHumanConfirmation { get; private set; }
+
+    /// <summary>
+    /// Un agent exige une décision humaine avant toute action qui touche au réel.
+    ///
+    /// <para>
+    /// La valeur par défaut est <c>true</c>, et c'est délibéré : le défaut d'un
+    /// drapeau de sécurité doit fermer, pas ouvrir. Un agent créé sans que
+    /// personne n'y pense ne doit pas pouvoir écrire dans EAIOS sans qu'on le lui
+    /// ait accordé. Le désactiver reste possible, mais devient un geste explicite.
+    /// </para>
+    /// </summary>
+    public bool RequireHumanConfirmation { get; private set; } = true;
     public int? MaxExecutionSeconds { get; private set; }
     public bool MemoryEnabled { get; private set; }
     public int? MaxMemoryItems { get; private set; }
@@ -98,7 +129,10 @@ public sealed class Agent : TenantEntity
             Status = AgentStatus.Draft,
             Visibility = AgentVisibility.Organization,
             OwnerId = ownerId,
-            SystemPrompt = systemPrompt
+            SystemPrompt = systemPrompt,
+            // Répété ici, pas seulement en initialiseur de propriété : la
+            // garantie doit être lisible à l'endroit où l'agent naît.
+            RequireHumanConfirmation = true
         };
         agent.SetOrganizationId(organizationId);
         agent.SetCreated(ownerId);
@@ -115,8 +149,31 @@ public sealed class Agent : TenantEntity
 
     public void Deprecate() => Status = AgentStatus.Deprecated;
 
+    public void SetSubAgents(string? subAgentsJson)
+    {
+        SubAgentsJson = subAgentsJson;
+        if (Status == AgentStatus.Published) Status = AgentStatus.Draft;
+        VersionNumber++;
+    }
+
+    /// <summary>
+    /// Configuration initiale, à la création : mêmes champs que <see cref="Update"/>
+    /// mais sans incrémenter le numéro de version — l'agent n'a encore jamais existé.
+    /// </summary>
+    public void Configure(string? llmConfigJson, Guid[]? knowledgePackIds, string[]? enabledTools,
+        bool memoryEnabled, string[]? tags, Guid? workspaceId)
+    {
+        if (llmConfigJson is not null) LlmConfigJson = llmConfigJson;
+        if (knowledgePackIds is not null) KnowledgePackIds = knowledgePackIds;
+        if (enabledTools is not null) EnabledTools = enabledTools;
+        MemoryEnabled = memoryEnabled;
+        if (tags is not null) Tags = tags;
+        if (workspaceId.HasValue) { WorkspaceId = workspaceId; Visibility = AgentVisibility.Workspace; }
+    }
+
     public void Update(string? displayName, string? description, string? systemPrompt,
-        string? llmConfigJson, Guid[]? knowledgePackIds, string[]? enabledTools, bool? memoryEnabled)
+        string? llmConfigJson, Guid[]? knowledgePackIds, string[]? enabledTools, bool? memoryEnabled,
+        AgentVisibility? visibility = null, string[]? tags = null)
     {
         if (!string.IsNullOrWhiteSpace(displayName)) DisplayName = displayName.Trim();
         if (description is not null) Description = description;
@@ -125,6 +182,9 @@ public sealed class Agent : TenantEntity
         if (knowledgePackIds is not null) KnowledgePackIds = knowledgePackIds;
         if (enabledTools is not null) EnabledTools = enabledTools;
         if (memoryEnabled.HasValue) MemoryEnabled = memoryEnabled.Value;
+        // Le contrat de mise à jour les acceptait ; le service les perdait en silence.
+        if (visibility.HasValue) Visibility = visibility.Value;
+        if (tags is not null) Tags = tags;
         // Editing a published agent reverts to draft
         if (Status == AgentStatus.Published) Status = AgentStatus.Draft;
         VersionNumber++;
@@ -228,7 +288,8 @@ public sealed class AgentExecution : TenantEntity
     public void Start() => Status = AgentExecutionStatus.Running;
 
     public void Complete(string? output, int promptTokens, int completionTokens, decimal costUsd,
-        string? modelUsed, string[]? citations = null, Guid[]? sourceDocIds = null)
+        string? modelUsed, string[]? citations = null, Guid[]? sourceDocIds = null,
+        int? stepCount = null, string? outputDataJson = null)
     {
         Status = AgentExecutionStatus.Completed;
         CompletedAt = DateTime.UtcNow;
@@ -241,12 +302,111 @@ public sealed class AgentExecution : TenantEntity
         ModelUsed = modelUsed;
         Citations = citations;
         SourceDocumentIds = sourceDocIds ?? [];
+        // Alimentent la console de supervision : « étape 4/7 » et les renvois
+        // numérotés de la conversation. Les champs existaient depuis le début et
+        // n'étaient jamais remplis.
+        StepCount = stepCount;
+        OutputDataJson = outputDataJson;
+    }
+
+    /// <summary>Consommation constatée, même lorsque l'exécution n'aboutit pas.</summary>
+    public void RecordUsage(int totalTokens, decimal costUsd, string? modelUsed, int? stepCount)
+    {
+        TotalTokens = totalTokens;
+        CostUsd = costUsd;
+        if (modelUsed is not null) ModelUsed = modelUsed;
+        if (stepCount.HasValue) StepCount = stepCount;
     }
 
     public void Fail(string errorCode, string errorMessage) { Status = AgentExecutionStatus.Failed; CompletedAt = DateTime.UtcNow; ErrorCode = errorCode; ErrorMessage = errorMessage; }
     public void Cancel() { Status = AgentExecutionStatus.Cancelled; CompletedAt = DateTime.UtcNow; }
-    public void AwaitHumanInput() { Status = AgentExecutionStatus.AwaitingHumanInput; RequiresHumanInput = true; }
+    /// <summary>Restée « en cours » au-delà du raisonnable : le planificateur la clôt.</summary>
+    public void TimeOut() { Status = AgentExecutionStatus.TimedOut; CompletedAt = DateTime.UtcNow; Duration = CompletedAt - StartedAt; ErrorCode ??= "TIMED_OUT"; ErrorMessage ??= "Délai d'exécution dépassé."; }
+    /// <summary>Exécution lancée par un nœud « agent » d'un workflow : l'instance reprend quand elle aboutit.</summary>
+    public void LinkToWorkflowInstance(Guid instanceId) => WorkflowInstanceId = instanceId;
+    /// <summary>
+    /// L'agent s'est arrêté et demande une décision.
+    ///
+    /// <para>
+    /// Ce n'est pas un échec : côté runtime, l'état est checkpointé et
+    /// l'exécution reprendra exactement au point d'arrêt. <paramref name="decisionJson"/>
+    /// porte la question, les options et les preuves — de quoi construire la
+    /// tâche humaine sans rien deviner.
+    /// </para>
+    /// </summary>
+    public void AwaitHumanInput(string? decisionJson = null)
+    {
+        Status = AgentExecutionStatus.AwaitingHumanInput;
+        RequiresHumanInput = true;
+        if (decisionJson is not null) OutputDataJson = decisionJson;
+    }
     public void ResumeFromHumanInput(string humanResponse) { Status = AgentExecutionStatus.Running; RequiresHumanInput = false; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTITY: AgentConversation
+// Table: agent.conversations
+//
+// Un fil de conversation entre une personne et un agent. Chaque tour est une
+// AgentExecution dont SessionId vaut l'identifiant du fil ; côté runtime, le fil
+// est le `thread_id` LangGraph, donc la mémoire de la conversation. C'est ce qui
+// permet de rouvrir un échange d'hier et de le poursuivre.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+public sealed class AgentConversation : TenantEntity
+{
+    public Guid AgentId { get; private set; }
+    public Guid UserId { get; private set; }
+    public string Title { get; private set; } = string.Empty;
+    public bool IsPinned { get; private set; }
+    public int TurnCount { get; private set; }
+    public DateTime LastActivityAt { get; private set; }
+    public AgentExecutionStatus LastStatus { get; private set; }
+    public Guid? LastExecutionId { get; private set; }
+
+    /// <summary>Longueur au-delà de laquelle le premier message est coupé pour servir de titre.</summary>
+    public const int MaxTitleLength = 80;
+
+    public static AgentConversation Create(Guid organizationId, Guid agentId, Guid userId, string firstInput)
+    {
+        var conversation = new AgentConversation
+        {
+            Id = Guid.CreateVersion7(),
+            AgentId = agentId,
+            UserId = userId,
+            Title = TitleFrom(firstInput),
+            LastActivityAt = DateTime.UtcNow,
+            LastStatus = AgentExecutionStatus.Queued
+        };
+        conversation.SetOrganizationId(organizationId);
+        conversation.SetCreated(userId);
+        return conversation;
+    }
+
+    /// <summary>Le titre par défaut est le début du premier message, sur une ligne.</summary>
+    public static string TitleFrom(string input)
+    {
+        var line = string.Join(' ', input.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)).Trim();
+        if (line.Length == 0) return "Conversation";
+        return line.Length <= MaxTitleLength ? line : line[..(MaxTitleLength - 1)].TrimEnd() + "…";
+    }
+
+    public void RecordTurn(AgentExecution execution)
+    {
+        // Un tour est compté à son premier enregistrement, pas à chaque mise à
+        // jour de statut de la même exécution.
+        if (LastExecutionId != execution.Id) TurnCount++;
+        LastExecutionId = execution.Id;
+        LastStatus = execution.Status;
+        LastActivityAt = DateTime.UtcNow;
+    }
+
+    public void Rename(string title)
+    {
+        if (!string.IsNullOrWhiteSpace(title)) Title = TitleFrom(title);
+    }
+
+    public void Pin(bool pinned) => IsPinned = pinned;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

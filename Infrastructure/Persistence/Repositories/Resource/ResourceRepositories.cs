@@ -20,14 +20,21 @@ public sealed record DocumentQuery(
     DateTime?              DateFrom       = null,
     DateTime?              DateTo         = null,
     int                    Page           = 1,
-    int                    PageSize       = 20);
+    int                    PageSize       = 20,
+    /// <summary>Plafond de la personne ; au-dessus, seuls les identifiants explicitement accordés passent.</summary>
+    ResourceClassification? MaxClassification = null,
+    IReadOnlySet<Guid>?    ExplicitlyAllowed = null,
+    IReadOnlySet<Guid>?    ExplicitlyDenied  = null);
 
 public interface IDocumentRepository
 {
     Task<Document?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<Document?> GetWithDetailsAsync(Guid id, CancellationToken ct = default);
     Task<PagedResult<Document>> SearchAsync(DocumentQuery query, CancellationToken ct = default);
+    /// <summary>Plein texte PostgreSQL sur le titre, la description et le texte extrait, par pertinence.</summary>
+    Task<IReadOnlyList<Document>> FullTextSearchAsync(string query, Guid? workspaceId, string[]? classifications, int take, ResourceClassification? maxClassification = null, IReadOnlySet<Guid>? allowed = null, IReadOnlySet<Guid>? denied = null, CancellationToken ct = default);
     Task<IReadOnlyList<Document>> GetTrashedAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<Document>> GetTrashedAsync(ResourceClassification? maxClassification, IReadOnlySet<Guid>? allowed, IReadOnlySet<Guid>? denied, CancellationToken ct = default);
     Task<IReadOnlyList<Document>> GetByOwnerAsync(Guid ownerId, CancellationToken ct = default);
     Task AddAsync(Document document, CancellationToken ct = default);
     void Update(Document document);
@@ -58,6 +65,7 @@ public sealed class DocumentRepository(EaiosDbContext db) : RepositoryBase<Docum
         else                           query = query.Where(d => d.Status != ResourceStatus.Deleted);
         if (q.DateFrom.HasValue)       query = query.Where(d => d.CreatedAt >= q.DateFrom);
         if (q.DateTo.HasValue)         query = query.Where(d => d.CreatedAt <= q.DateTo);
+        query = ApplyVisibility(query, q.MaxClassification, q.ExplicitlyAllowed, q.ExplicitlyDenied);
 
         var total = await query.CountAsync(ct);
         var items = await query.OrderByDescending(d => d.UpdatedAt)
@@ -66,11 +74,69 @@ public sealed class DocumentRepository(EaiosDbContext db) : RepositoryBase<Docum
         return new PagedResult<Document>(items, q.Page, q.PageSize, total);
     }
 
+    public async Task<IReadOnlyList<Document>> FullTextSearchAsync(string query, Guid? workspaceId, string[]? classifications, int take, ResourceClassification? maxClassification = null, IReadOnlySet<Guid>? allowed = null, IReadOnlySet<Guid>? denied = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return [];
+
+        var q = ApplyVisibility(Set.AsNoTracking().Where(d => d.Status == ResourceStatus.Active), maxClassification, allowed, denied);
+        if (workspaceId.HasValue) q = q.Where(d => d.WorkspaceId == workspaceId);
+        if (classifications is { Length: > 0 })
+        {
+            var wanted = classifications
+                .Select(c => Enum.TryParse<ResourceClassification>(c, true, out var parsed) ? parsed : (ResourceClassification?)null)
+                .Where(c => c.HasValue).Select(c => c!.Value).ToList();
+            if (wanted.Count > 0) q = q.Where(d => wanted.Contains(d.Classification));
+        }
+
+        // Le dictionnaire « french » couvre l'essentiel du corpus ; `plainto_tsquery`
+        // accepte une requête telle que la personne l'a tapée, sans syntaxe.
+        return await q
+            .Select(d => new
+            {
+                Document = d,
+                Rank = EF.Functions.ToTsVector("french", (d.Title ?? "") + " " + (d.Description ?? "") + " " + (d.ExtractedText ?? ""))
+                    .Rank(EF.Functions.PlainToTsQuery("french", query))
+            })
+            .Where(x => EF.Functions.ToTsVector("french", (x.Document.Title ?? "") + " " + (x.Document.Description ?? "") + " " + (x.Document.ExtractedText ?? ""))
+                .Matches(EF.Functions.PlainToTsQuery("french", query)))
+            .OrderByDescending(x => x.Rank)
+            .Take(take)
+            .Select(x => x.Document)
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<Document>> GetTrashedAsync(CancellationToken ct = default) =>
-        await Set.IgnoreQueryFilters()
-                 .Where(d => d.Status == ResourceStatus.Trashed)
+        await Set.Where(d => d.Status == ResourceStatus.Trashed)
                  .OrderByDescending(d => d.UpdatedAt)
                  .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Document>> GetTrashedAsync(ResourceClassification? maxClassification, IReadOnlySet<Guid>? allowed, IReadOnlySet<Guid>? denied, CancellationToken ct = default) =>
+        await ApplyVisibility(Set.Where(d => d.Status == ResourceStatus.Trashed), maxClassification, allowed, denied)
+                 .OrderByDescending(d => d.UpdatedAt)
+                 .ToListAsync(ct);
+
+    /// <summary>
+    /// Le plafond de classification et les ACL nominatives, sous forme de
+    /// filtre de requête : un document au-dessus du plafond n'apparaît que s'il
+    /// est explicitement accordé, et jamais s'il est explicitement refusé.
+    /// </summary>
+    private static IQueryable<Document> ApplyVisibility(IQueryable<Document> query, ResourceClassification? max, IReadOnlySet<Guid>? allowed, IReadOnlySet<Guid>? denied)
+    {
+        if (max.HasValue)
+        {
+            var ceiling = max.Value;
+            var allowedIds = (allowed ?? new HashSet<Guid>()).ToList();
+            query = allowedIds.Count == 0
+                ? query.Where(d => d.Classification <= ceiling)
+                : query.Where(d => d.Classification <= ceiling || allowedIds.Contains(d.Id));
+        }
+        if (denied is { Count: > 0 })
+        {
+            var deniedIds = denied.ToList();
+            query = query.Where(d => !deniedIds.Contains(d.Id));
+        }
+        return query;
+    }
 
     public async Task<IReadOnlyList<Document>> GetByOwnerAsync(Guid ownerId, CancellationToken ct = default) =>
         await Set.Where(d => d.OwnerId == ownerId).OrderByDescending(d => d.CreatedAt).ToListAsync(ct);

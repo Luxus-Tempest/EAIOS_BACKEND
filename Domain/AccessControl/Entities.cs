@@ -59,6 +59,8 @@ public static class Permissions
     public const string DeptRead   = "department.read";
     public const string DeptUpdate = "department.update";
     public const string DeptDelete = "department.delete";
+    /// <summary>Nom de politique du contrôleur des départements : création, modification, membres.</summary>
+    public const string DeptManage = "department.manage";
 
     // Access Control
     public const string RoleCreate     = "role.create";
@@ -69,6 +71,8 @@ public static class Permissions
     public const string PolicyCreate   = "policy.create";
     public const string PolicyRead     = "policy.read";
     public const string PolicyUpdate   = "policy.update";
+    /// <summary>Nom de politique des contrôleurs de contrôle d'accès : gère rôles, politiques et ACL.</summary>
+    public const string AccessControlManage = "access_control.manage";
 
     // Resource
     public const string ResourceCreate   = "resource.create";
@@ -286,6 +290,18 @@ public sealed class Policy : TenantEntity
         if (permissions is not null) Permissions = permissions;
         if (condition is not null) Condition = condition;
         if (isActive.HasValue) IsActive = isActive.Value;
+    }
+
+    /// <summary>
+    /// À qui et à quoi la politique s'applique. Sans bénéficiaire ni type de
+    /// ressource, elle vaut pour tout le monde et toutes les ressources.
+    /// </summary>
+    public void SetTarget(PrincipalType principalType, string? principalId, string? resourceType, int priority)
+    {
+        PrincipalType = principalType;
+        PrincipalId   = string.IsNullOrWhiteSpace(principalId) ? null : principalId.Trim();
+        ResourceType  = string.IsNullOrWhiteSpace(resourceType) ? null : resourceType.Trim();
+        Priority      = priority;
     }
 }
 

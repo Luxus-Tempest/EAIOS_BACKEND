@@ -237,6 +237,9 @@ public sealed class WorkflowTaskConfiguration : IEntityTypeConfiguration<Workflo
         b.Property(t => t.AssigneeType).HasConversion<string>().HasMaxLength(30);
         b.HasIndex(t => new { t.AssigneeId, t.Status });
         b.HasIndex(t => t.DueAt);
+        // Retrouver la tache d'un arret d'agent, et seulement celles-la :
+        // l'index filtre ne pese rien tant que les taches de workflow dominent.
+        b.HasIndex(t => t.AgentExecutionId).HasFilter("\"AgentExecutionId\" IS NOT NULL");
     }
 }
 

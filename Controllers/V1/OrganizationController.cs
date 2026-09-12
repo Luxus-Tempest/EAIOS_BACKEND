@@ -15,6 +15,8 @@ public sealed class OrganizationController(
     IUserRepository       userRepo,
     IInvitationRepository invitationRepo,
     IPermissionService    permService,
+    EAIOS.Api.Application.AccessControl.IAccessControlService accessControl,
+    EAIOS.Api.Infrastructure.Persistence.Repositories.AccessControl.IUserRoleRepository userRoleRepo,
     EAIOS.Api.Infrastructure.Email.IEmailService emailService,
     EAIOS.Api.Infrastructure.Analytics.IAnalyticsTracker analytics,
     EAIOS.Api.Infrastructure.Persistence.PlatformDbContext platformDb) : V1ApiController
@@ -30,7 +32,7 @@ public sealed class OrganizationController(
 
     // ── PUT /api/v1/organization ──────────────────────────────────────────────
     [HttpPut]
-    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "organization.manage")]
+    [Microsoft.AspNetCore.Authorization.Authorize(Policy = "org.manage")]
     public async Task<IActionResult> UpdateOrganization(
         [FromBody] EAIOS.Api.Contracts.UpdateOrganizationRequest req,
         CancellationToken ct)
@@ -60,6 +62,15 @@ public sealed class OrganizationController(
     {
         var result = await userRepo.SearchAsync(q, status, page, pageSize, ct);
 
+        // La colonne « Rôles » de l'écran lisait un champ que la réponse ne
+        // portait pas. Une seule requête pour toute la page, pas une par ligne.
+        var now = DateTime.UtcNow;
+        var assignments = await userRoleRepo.GetByUsersAsync(result.Items.Select(u => u.Id).ToList(), ct);
+        var rolesByUser = assignments
+            .Where(a => a.ExpiresAt == null || a.ExpiresAt > now)
+            .GroupBy(a => a.UserId)
+            .ToDictionary(g => g.Key, g => g.Select(a => a.RoleName).Distinct().ToArray());
+
         return OkList(result.Items.Select(u => new
         {
             u.Id,
@@ -75,7 +86,8 @@ public sealed class OrganizationController(
             u.IsEmailVerified,
             u.IsMfaEnabled,
             u.LastLoginAt,
-            u.CreatedAt
+            u.CreatedAt,
+            Roles = rolesByUser.GetValueOrDefault(u.Id, [])
         }).ToList(), result.TotalCount, page, pageSize);
     }
 
@@ -86,12 +98,16 @@ public sealed class OrganizationController(
         var user = await userRepo.GetByIdAsync(userId, ct);
         if (user == null) return NotFound();
 
+        var assignments = await userRoleRepo.GetByUserAsync(userId, ct);
+        var roles = assignments.Where(a => !a.IsExpired).Select(a => a.RoleName).Distinct().ToArray();
+
         return Ok200(new
         {
             user.Id, user.Email, user.FirstName, user.LastName, user.FullName,
             user.DisplayName, user.AvatarUrl, user.JobTitle, user.Department,
             user.Locale, user.TimeZone, user.Status, user.IsEmailVerified,
-            user.IsMfaEnabled, user.LastLoginAt, user.CreatedAt
+            user.IsMfaEnabled, user.LastLoginAt, user.CreatedAt,
+            Roles = roles
         });
     }
 
@@ -156,8 +172,18 @@ public sealed class OrganizationController(
         if (existing != null)
             return Conflict("Une invitation est déjà en attente pour cet email.");
 
+        // Le rôle doit être résolu ICI : l'inscription n'attribue un rôle que si
+        // l'invitation porte son identifiant. Sans cette résolution, tout invité
+        // arrivait sans aucun droit. Sans rôle demandé, on donne le rôle membre.
+        var requested = string.IsNullOrWhiteSpace(req.Role) || req.Role == "member"
+            ? Domain.AccessControl.SystemRoles.OrgMember
+            : req.Role;
+        var role = await accessControl.ResolveRoleAsync(requested, ct);
+        if (role == null)
+            return BadRequest(new { code = "UNKNOWN_ROLE", message = $"Le rôle « {requested} » n'existe pas dans cette organisation." });
+
         var invitation = Invitation.Create(
-            TenantId, req.Email.Trim(), ActorId.Value, role: req.Role, message: req.Message);
+            TenantId, req.Email.Trim(), ActorId.Value, role: role.Name, roleId: role.Id, message: req.Message);
 
         await invitationRepo.AddAsync(invitation, ct);
         await invitationRepo.SaveAsync(ct);

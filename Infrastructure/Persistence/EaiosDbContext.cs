@@ -74,6 +74,12 @@ public sealed class EaiosDbContext : DbContext
     public DbSet<AgentVersion>       AgentVersions   => Set<AgentVersion>();
     public DbSet<AgentExecution>     AgentExecutions => Set<AgentExecution>();
     public DbSet<AgentMemory>        AgentMemories   => Set<AgentMemory>();
+    public DbSet<AgentConversation>  AgentConversations => Set<AgentConversation>();
+
+    // Jeux de test et evaluations — alimentent « Sante de l'agent » du Studio.
+    public DbSet<AgentTestCase>      AgentTestCases   => Set<AgentTestCase>();
+    public DbSet<AgentTestRun>       AgentTestRuns    => Set<AgentTestRun>();
+    public DbSet<AgentTestResult>    AgentTestResults => Set<AgentTestResult>();
     public DbSet<PromptTemplate>     PromptTemplates => Set<PromptTemplate>();
 
     // ── Workflow ──────────────────────────────────────────────────────────────
@@ -147,8 +153,16 @@ public sealed class EaiosDbContext : DbContext
 
             TenantFilterMethod.MakeGenericMethod(clrType).Invoke(this, [modelBuilder]);
 
-            // Concurrency Token
-            modelBuilder.Entity(clrType).Property(nameof(TenantEntity.Version)).IsRowVersion();
+            // Jeton de concurrence : le `Version` (xmin) de l'entité de base.
+            // Une entité qui redéclare `Version` comme étiquette lisible
+            // (« 1.0.0 » : PromptTemplate, WorkflowDefinition) n'en a pas.
+            // Marquée « générée par la base », sa colonne était omise à
+            // l'insertion et PostgreSQL refusait le NULL : aucun workflow ne
+            // pouvait être créé.
+            var redeclaresVersion = clrType.GetProperty(nameof(TenantEntity.Version),
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly) is not null;
+            if (!redeclaresVersion)
+                modelBuilder.Entity(clrType).Property(nameof(TenantEntity.Version)).IsRowVersion();
         }
     }
 

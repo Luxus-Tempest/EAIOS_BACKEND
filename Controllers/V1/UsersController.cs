@@ -224,7 +224,7 @@ public sealed class UsersController(
 
     // ── Admin (users management) ──────────────────────────────────────────────
     [HttpGet]
-    [Authorize(Policy = "identity.users.manage")]
+    [Authorize(Policy = "user.read")]
     public async Task<IActionResult> ListUsers(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,

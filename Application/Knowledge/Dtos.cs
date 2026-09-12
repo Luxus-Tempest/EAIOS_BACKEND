@@ -44,7 +44,9 @@ public sealed record UpdateKnowledgeItemRequest(
     string? Summary,
     Guid? PackId,
     string[]? Tags,
-    string? Language);
+    string? Language,
+    /// <summary>Vrai pour retirer la fiche de son pack : <c>PackId</c> absent veut dire « inchangé ».</summary>
+    bool ClearPack = false);
 
 public sealed record ValidateKnowledgeItemRequest(string? Note = null);
 
@@ -63,6 +65,7 @@ public sealed record KnowledgeChunkDto(
 
 // ── KnowledgePack ─────────────────────────────────────────────────────────────
 
+/// <summary>Contrat de lecture d'un pack — le seul, servi par le contrôleur.</summary>
 public sealed record KnowledgePackDto(
     Guid Id,
     string Name,
@@ -74,7 +77,8 @@ public sealed record KnowledgePackDto(
     int ItemCount,
     DateTime? LastExportedAt,
     Guid OwnerId,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    DateTime? UpdatedAt = null);
 
 public sealed record CreatePackRequest(
     string Name,
@@ -84,10 +88,11 @@ public sealed record CreatePackRequest(
     bool IsPublic = false);
 
 public sealed record UpdatePackRequest(
-    string? Name,
-    string? Description,
-    string[]? Tags,
-    bool? IsPublic);
+    string? Name = null,
+    string? Description = null,
+    string[]? Tags = null,
+    bool? IsPublic = null,
+    string? Language = null);
 
 // ── Knowledge Graph ───────────────────────────────────────────────────────────
 
@@ -108,11 +113,6 @@ public sealed record GraphRelationDto(
 
 public sealed record GraphQueryRequest(string Query, Dictionary<string, object>? Parameters = null);
 
-public sealed record CreateKnowledgePackRequest(
-    string Name,
-    string? Description = null,
-    bool IsPublic = false);
-
 public sealed record AskRequest(
     string Question,
     Guid? PackId = null);
@@ -121,7 +121,21 @@ public sealed record AskResponse(
     string Answer,
     IReadOnlyList<SourceRef> Sources,
     int PromptTokens,
-    int CompletionTokens);
+    int CompletionTokens,
+    // ── Ajouts : le design exige la citation à la page et à l'article ────────
+    // Optionnels, pour que les consommateurs existants du contrat ne cassent pas.
+    IReadOnlyList<AnswerCitation>? Citations = null,
+    IReadOnlyList<string>? Unresolved = null,
+    string RetrievalMode = "agentic");
+
+/// <summary>« [1] Contrat-cadre v12 · p. 3, art. 7.1 », décomposé.</summary>
+public sealed record AnswerCitation(
+    int Index,
+    Guid? DocumentId,
+    Guid? KnowledgeItemId,
+    string Title,
+    int? Page,
+    string? Reference);
 
 public sealed record SourceRef(
     Guid Id,

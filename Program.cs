@@ -25,7 +25,19 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<EAIOS.Api.Application.Common.Validators.LoginRequestValidator>();
 
 // ── Authentication JWT ────────────────────────────────────────────────────
-var tokenSecret = builder.Configuration["Security:TokenSigningKey"] ?? "eaios-dev-signing-key-CHANGE-IN-PRODUCTION-must-be-at-least-64-characters-long!";
+// Hors développement, une clé absente doit empêcher le démarrage : démarrer
+// avec une clé de repli lisible dans le code reviendrait à laisser n'importe
+// qui forger des jetons valides.
+var tokenSecret = builder.Configuration["Security:TokenSigningKey"];
+if (string.IsNullOrWhiteSpace(tokenSecret))
+{
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException(
+            "Security:TokenSigningKey est absente : l'API refuse de démarrer sans clé de signature hors développement.");
+    tokenSecret = "eaios-dev-signing-key-CHANGE-IN-PRODUCTION-must-be-at-least-64-characters-long!";
+}
+if (System.Text.Encoding.UTF8.GetByteCount(tokenSecret) < 32)
+    throw new InvalidOperationException("Security:TokenSigningKey doit faire au moins 32 octets.");
 var tokenKey    = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(tokenSecret)) { KeyId = "eaios-key" };
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -148,9 +160,13 @@ app.UseMiddleware<EAIOS.Api.Middleware.CorrelationIdMiddleware>();
 app.UseMiddleware<EAIOS.Api.Middleware.RateLimitingMiddleware>();
 
 app.UseAuthentication();
-app.UseAuthorization();
 
+// Le tenant se résout AVANT l'autorisation : les gestionnaires de politique
+// lisent les rôles de la personne, et ces rôles vivent derrière le filtre de
+// tenant. Résoudre après revenait à évaluer les droits sans organisation.
 app.UseMiddleware<EAIOS.Api.Middleware.TenantResolutionMiddleware>();
+
+app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthChecks("/health");
@@ -159,6 +175,24 @@ app.MapHealthChecks("/health");
 if (app.Environment.IsDevelopment())
 {
     await SeedDevelopmentDataAsync(app);
+}
+
+// ── Catalogue des connecteurs : niveau plateforme, dans tout environnement ──
+// Sans lui, l'écran « Connecteurs » ne propose aucune source à raccorder.
+using (var catalogScope = app.Services.CreateScope())
+{
+    var catalogLogger = catalogScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        var platformDb = catalogScope.ServiceProvider.GetRequiredService<EAIOS.Api.Infrastructure.Persistence.PlatformDbContext>();
+        if (platformDb.Database.IsRelational() && await platformDb.Database.CanConnectAsync())
+            await EAIOS.Api.Infrastructure.Persistence.Seeds.ConnectorCatalogSeed.SeedAsync(platformDb);
+    }
+    catch (Exception ex)
+    {
+        // Une base pas encore migrée ne doit pas empêcher l'API de démarrer.
+        catalogLogger.LogWarning(ex, "Catalogue des connecteurs non amorcé.");
+    }
 }
 
 await app.RunAsync();
@@ -227,6 +261,25 @@ static async Task SeedDevelopmentDataAsync(WebApplication app)
             eaiosDb.Users.Update(existingAdmin);
             await eaiosDb.SaveChangesAsync();
             logger.LogInformation("✅ Updated admin user status to Active: admin@eaios.io / Admin@123456!");
+        }
+
+        // Les rôles système et le catalogue de permissions doivent exister dans
+        // toute organisation : sans eux, aucune invitation ne peut porter de rôle.
+        await EAIOS.Api.Infrastructure.Persistence.Seeds.SystemPermissionsSeed.SeedAsync(eaiosDb, orgId);
+
+        // Le compte de démo porte réellement le rôle d'administrateur d'organisation,
+        // pour que le chemin RBAC soit exercé et pas seulement le contournement
+        // « administrateur plateforme » lié à son adresse.
+        var adminUser = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.FirstAsync(eaiosDb.Users, u => u.NormalizedEmail == "ADMIN@EAIOS.IO");
+        var orgAdminRole = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.FirstOrDefaultAsync(
+            eaiosDb.Roles, r => r.Name == EAIOS.Api.Domain.AccessControl.SystemRoles.OrgAdmin);
+        if (orgAdminRole != null && !await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(
+                eaiosDb.UserRoles, ur => ur.UserId == adminUser.Id && ur.RoleId == orgAdminRole.Id))
+        {
+            eaiosDb.UserRoles.Add(EAIOS.Api.Domain.AccessControl.UserRole.Create(
+                orgId, adminUser.Id, orgAdminRole.Id, orgAdminRole.Name, adminUser.Id));
+            orgAdminRole.IncrementUserCount();
+            await eaiosDb.SaveChangesAsync();
         }
 
         logger.LogInformation("✅ Development seed complete for org {OrgId}", orgId);

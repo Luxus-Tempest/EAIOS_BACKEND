@@ -13,7 +13,8 @@ public sealed class ConnectorService(
     ISyncJobRepository syncJobRepo,
     ICredentialProtector credentialProtector,
     IHttpClientFactory httpClientFactory,
-    ILogger<ConnectorService> logger) : IConnectorService
+    ILogger<ConnectorService> logger,
+    IEnumerable<IConnectorSyncEngine>? syncEngines = null) : IConnectorService
 {
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
 
@@ -235,6 +236,13 @@ public sealed class ConnectorService(
     // SYNCHRONISATION
     // ═════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Lance une synchronisation. Jusqu'ici, elle déclarait un succès sans rien
+    /// lire : les jobs passaient « Success · 0 » et l'instance restait « saine ».
+    /// Désormais un moteur (<see cref="IConnectorSyncEngine"/>) fait le travail
+    /// s'il en existe un pour cette définition ; sinon, l'instance passe en
+    /// santé dégradée avec un message explicite, et le résultat le dit.
+    /// </summary>
     public async Task<SyncRunResult> TriggerSyncAsync(Guid id, CancellationToken ct = default)
     {
         var instance = await instanceRepo.GetByIdAsync(id, ct)
@@ -244,14 +252,71 @@ public sealed class ConnectorService(
             throw new InvalidOperationException(
                 $"Le connecteur doit être actif pour lancer une synchronisation (état actuel : {instance.Status}).");
 
+        var definition = await definitionRepo.GetByIdAsync(instance.DefinitionId, ct)
+            ?? throw new KeyNotFoundException("Définition de connecteur introuvable.");
+
+        var engine = (syncEngines ?? []).FirstOrDefault(e => e.Supports(definition));
+        var executionId = Guid.CreateVersion7().ToString("N");
+        var statusUrl   = $"/api/v1/connectors/instances/{id}";
+        var jobs = await syncJobRepo.GetByInstanceAsync(id, ct);
+
+        if (engine is null)
+        {
+            var message = $"Aucun moteur de synchronisation n'est disponible pour « {definition.Name} » : "
+                        + "la demande est enregistrée, aucun document n'a été importé.";
+            instance.UpdateHealth(SyncHealth.Degraded, message);
+            instanceRepo.Update(instance);
+
+            foreach (var job in jobs.Where(j => j.Status == SyncJobStatus.Active))
+            {
+                job.RecordRun(SyncJobLastRunResult.Failed, 0);
+                ScheduleNext(job);
+                syncJobRepo.Update(job);
+            }
+
+            await instanceRepo.SaveAsync(ct);
+            await syncJobRepo.SaveAsync(ct);
+
+            logger.LogWarning("Synchronisation demandée sur {InstanceId} ({Definition}) sans moteur disponible.", id, definition.Slug);
+            return new SyncRunResult(executionId, statusUrl, "NotImplemented", message);
+        }
+
+        var config      = DeserializeConfig(instance.ConfigurationJson);
+        var credentials = credentialProtector.Unprotect(instance.CredentialsEncrypted);
+
+        SyncOutcome outcome;
+        try
+        {
+            outcome = await engine.SyncAsync(instance, definition, config, credentials, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var message = $"Synchronisation échouée : {ex.Message}";
+            instance.SetError(message);
+            instanceRepo.Update(instance);
+            foreach (var job in jobs.Where(j => j.Status == SyncJobStatus.Active))
+            {
+                job.RecordRun(SyncJobLastRunResult.Failed, 0);
+                ScheduleNext(job);
+                syncJobRepo.Update(job);
+            }
+            await instanceRepo.SaveAsync(ct);
+            await syncJobRepo.SaveAsync(ct);
+            logger.LogWarning(ex, "Synchronisation échouée sur {InstanceId}.", id);
+            return new SyncRunResult(executionId, statusUrl, "Failed", message);
+        }
+
+        var result = outcome.Failed == 0 ? SyncJobLastRunResult.Success
+                   : outcome.Imported > 0 ? SyncJobLastRunResult.PartialSuccess
+                   : SyncJobLastRunResult.Failed;
+
         instance.RecordSync();
+        instance.UpdateHealth(result == SyncJobLastRunResult.Success ? SyncHealth.Healthy : SyncHealth.Degraded, outcome.Message);
         instanceRepo.Update(instance);
 
-        // Replanifier les jobs cron rattachés à cette instance.
-        var jobs = await syncJobRepo.GetByInstanceAsync(id, ct);
         foreach (var job in jobs.Where(j => j.Status == SyncJobStatus.Active))
         {
-            job.RecordRun(SyncJobLastRunResult.Success, 0);
+            job.RecordRun(result, outcome.Imported);
             ScheduleNext(job);
             syncJobRepo.Update(job);
         }
@@ -259,8 +324,7 @@ public sealed class ConnectorService(
         await instanceRepo.SaveAsync(ct);
         await syncJobRepo.SaveAsync(ct);
 
-        var executionId = Guid.CreateVersion7().ToString("N");
-        return new SyncRunResult(executionId, $"/api/v1/connectors/instances/{id}/status/{executionId}");
+        return new SyncRunResult(executionId, statusUrl, result.ToString(), outcome.Message, outcome.Discovered, outcome.Imported);
     }
 
     public async Task<SyncJob> CreateSyncJobAsync(
